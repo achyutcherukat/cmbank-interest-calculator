@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../core/settings/app_settings_repository.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -10,6 +11,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  final _settingsRepository = AppSettingsRepository();
   final TextEditingController _rateController = TextEditingController();
   bool _saved = false;
 
@@ -20,8 +22,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadRate() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rate = prefs.getDouble('interest_rate') ?? 18.0;
+    final val = await _settingsRepository.getString('default_interest_rate');
+    final rate = double.tryParse(val ?? '') ?? 18.0;
     setState(() {
       _rateController.text = rate.toStringAsFixed(2);
     });
@@ -37,7 +39,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Invalid Rate',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          content: const Text('Please enter a valid interest rate between 0 and 100.',
+          content: const Text(
+              'Please enter a valid interest rate between 0 and 100.',
               style: TextStyle(fontSize: 18)),
           actions: [
             TextButton(
@@ -51,13 +54,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('interest_rate', rate);
-
-    setState(() {
-      _saved = true;
+    await _settingsRepository.upsertMany({
+      'default_interest_rate': (value: rate.toStringAsFixed(2), type: 'double'),
     });
 
+    setState(() => _saved = true);
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _saved = false);
     });
@@ -82,7 +83,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const SizedBox(height: 20),
 
-            // Info box
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
@@ -107,7 +107,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const SizedBox(height: 32),
 
-            // Interest Rate Input
             const Text(
               'Interest Rate (% per annum)',
               style: TextStyle(
@@ -135,13 +134,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const SizedBox(height: 32),
 
-            // Save Button
             ElevatedButton(
               onPressed: _saveRate,
               child: const Text('SAVE'),
             ),
 
-            // Saved confirmation
             if (_saved) ...[
               const SizedBox(height: 20),
               const Row(
@@ -150,7 +147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Icon(Icons.check_circle, color: Colors.green, size: 28),
                   SizedBox(width: 10),
                   Text(
-                    'Interest rate saved successfully!',
+                    'Interest rate saved!',
                     style: TextStyle(
                         fontSize: 18,
                         color: Colors.green,

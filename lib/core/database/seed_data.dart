@@ -57,5 +57,8 @@ class SeedData {
     'default_pledge_rate': ('0.0', 'double'),
     'staff_history_days': ('10', 'int'),
     'first_launch_completed': ('false', 'bool'),
+    'starting_pledge_number': ('3200', 'int'),
+    'opening_cash': ('0.00', 'double'),
+    'opening_upi': ('0.00', 'double'),
   };
 }

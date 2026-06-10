@@ -37,4 +37,10 @@ class AuthRepository {
       ),
     );
   }
+
+  Future<bool> verifyAdminPin(String pin) async {
+    final storedHash = await _settingsRepository.getString('admin_pin_hash');
+    if (storedHash == null || storedHash.isEmpty) return false;
+    return PinHasher.hash(pin) == storedHash;
+  }
 }

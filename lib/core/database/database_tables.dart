@@ -14,6 +14,7 @@ class DatabaseTables {
   static const settings = 'settings';
   static const auditLog = 'audit_log';
   static const backupLog = 'backup_log';
+  static const calcHistory = 'calc_history';
 }
 
 class DatabaseSchema {
@@ -51,8 +52,13 @@ CREATE TABLE pledges (
   start_date TEXT NOT NULL,
   due_date TEXT,
   status TEXT NOT NULL DEFAULT 'open'
-    CHECK(status IN ('open', 'closed', 'renewed', 'auctioned')),
+    CHECK(status IN ('open', 'closed', 'renewed', 'migrated')),
   closed_at TEXT,
+  closure_date TEXT,
+  source TEXT,
+  renewal_parent_id INTEGER,
+  total_interest_paid REAL NOT NULL DEFAULT 0,
+  total_amount_collected REAL NOT NULL DEFAULT 0,
   notes TEXT,
   created_by INTEGER,
   created_at TEXT NOT NULL,
@@ -69,9 +75,11 @@ CREATE TABLE payments (
   payment_type TEXT NOT NULL
     CHECK(payment_type IN ('interest', 'principal', 'closure', 'renewal')),
   amount REAL NOT NULL,
+  cash_amount REAL NOT NULL DEFAULT 0,
+  upi_amount REAL NOT NULL DEFAULT 0,
   interest_amount REAL NOT NULL DEFAULT 0,
   principal_amount REAL NOT NULL DEFAULT 0,
-  payment_mode TEXT NOT NULL CHECK(payment_mode IN ('cash', 'upi', 'bank')),
+  payment_mode TEXT NOT NULL DEFAULT 'cash' CHECK(payment_mode IN ('cash', 'upi', 'split', 'bank')),
   paid_at TEXT NOT NULL,
   notes TEXT,
   created_by INTEGER,
@@ -156,6 +164,7 @@ CREATE TABLE gold_rates (
   rate_date TEXT NOT NULL,
   rate_24k REAL NOT NULL,
   rate_22k REAL NOT NULL,
+  pledge_rate REAL NOT NULL DEFAULT 0,
   source TEXT NOT NULL DEFAULT 'manual',
   is_manual INTEGER NOT NULL DEFAULT 1,
   created_by INTEGER,
@@ -244,6 +253,23 @@ CREATE TABLE pledge_items (
 );
 ''';
 
+  static const createCalcHistory = '''
+CREATE TABLE calc_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  calculated_at TEXT NOT NULL,
+  principal REAL NOT NULL,
+  from_date TEXT NOT NULL,
+  to_date TEXT NOT NULL,
+  number_of_days INTEGER NOT NULL,
+  interest_rate REAL NOT NULL,
+  simple_interest REAL NOT NULL,
+  total_amount REAL NOT NULL,
+  minimum_charge_note TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+''';
+
   static const createIndexes = <String>[
     'CREATE INDEX idx_pledges_status ON pledges(status);',
     'CREATE INDEX idx_pledges_pledge_no ON pledges(pledge_no);',
@@ -268,6 +294,7 @@ CREATE TABLE pledge_items (
     createSettings,
     createAuditLog,
     createBackupLog,
+    createCalcHistory,
     ...createIndexes,
   ];
 }

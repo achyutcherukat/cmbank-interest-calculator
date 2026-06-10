@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/calc_history_repository.dart';
 import 'history_detail_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -22,33 +21,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _loadHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList('calculation_history') ?? [];
+    final entries = await CalcHistoryRepository.instance.getAll();
     setState(() {
-      _allHistory = raw
-          .map((e) => json.decode(e) as Map<String, dynamic>)
-          .toList()
-          .reversed
-          .toList();
+      _allHistory = entries;
     });
   }
 
-  Future<void> _deleteEntry(int reversedIndex) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList('calculation_history') ?? [];
-    final actualIndex = raw.length - 1 - reversedIndex;
-    raw.removeAt(actualIndex);
-    await prefs.setStringList('calculation_history', raw);
+  Future<void> _deleteEntry(int id) async {
+    await CalcHistoryRepository.instance.delete(id);
     _loadHistory();
   }
 
   Future<void> _clearAll() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('calculation_history');
+    await CalcHistoryRepository.instance.deleteAll();
     _loadHistory();
   }
 
-  void _confirmDeleteEntry(int index) {
+  void _confirmDeleteEntry(int id) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -65,7 +54,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           TextButton(
             onPressed: () {
               Navigator.of(ctx).pop();
-              _deleteEntry(index);
+              _deleteEntry(id);
             },
             child: const Text('Delete',
                 style: TextStyle(fontSize: 18, color: Colors.red)),
@@ -186,9 +175,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             color: Color(0xFF1A237E)),
                       ),
                     ),
-                    ...entries.asMap().entries.map((e) {
-                      final entryIndex = _allHistory.indexOf(e.value);
-                      final entry = e.value;
+                    ...entries.map((entry) {
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Slidable(
@@ -197,7 +184,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             children: [
                               SlidableAction(
                                 onPressed: (_) =>
-                                    _confirmDeleteEntry(entryIndex),
+                                    _confirmDeleteEntry(entry['id'] as int),
                                 backgroundColor: Colors.red,
                                 foregroundColor: Colors.white,
                                 icon: Icons.delete,

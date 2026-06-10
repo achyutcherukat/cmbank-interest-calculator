@@ -24,6 +24,9 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   final _confirmAdminPinController = TextEditingController();
   final _interestRateController = TextEditingController(text: '18.00');
   final _pledgeRateController = TextEditingController(text: '0.00');
+  final _startingPledgeNoController = TextEditingController(text: '3200');
+  final _openingCashController = TextEditingController(text: '0');
+  final _openingUpiController = TextEditingController(text: '0');
   final _settingsRepository = AppSettingsRepository();
 
   bool _isSaving = false;
@@ -38,6 +41,9 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
     _confirmAdminPinController.dispose();
     _interestRateController.dispose();
     _pledgeRateController.dispose();
+    _startingPledgeNoController.dispose();
+    _openingCashController.dispose();
+    _openingUpiController.dispose();
     super.dispose();
   }
 
@@ -64,6 +70,18 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
         ),
         'default_pledge_rate': (
           value: _pledgeRateController.text.trim(),
+          type: 'double',
+        ),
+        'starting_pledge_number': (
+          value: _startingPledgeNoController.text.trim(),
+          type: 'int',
+        ),
+        'opening_cash': (
+          value: _openingCashController.text.trim(),
+          type: 'double',
+        ),
+        'opening_upi': (
+          value: _openingUpiController.text.trim(),
           type: 'double',
         ),
         'first_launch_completed': (value: 'true', type: 'bool'),
@@ -145,7 +163,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 obscureText: true,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
-                inputFormatters: [_pinFormatter],
+                inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
                   labelText: 'Common Staff PIN',
                   prefixIcon: Icon(Icons.lock_outline),
@@ -158,7 +176,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 obscureText: true,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
-                inputFormatters: [_pinFormatter],
+                inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
                   labelText: 'Confirm Staff PIN',
                   prefixIcon: Icon(Icons.lock_reset),
@@ -174,7 +192,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 obscureText: true,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
-                inputFormatters: [_pinFormatter],
+                inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
                   labelText: 'Admin PIN',
                   prefixIcon: Icon(Icons.admin_panel_settings_outlined),
@@ -187,7 +205,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 obscureText: true,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
-                inputFormatters: [_pinFormatter],
+                inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
                   labelText: 'Confirm Admin PIN',
                   prefixIcon: Icon(Icons.verified_user_outlined),
@@ -234,8 +252,50 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 ),
                 inputFormatters: [_decimalFormatter],
                 decoration: const InputDecoration(
-                  labelText: 'Pledge Rate',
+                  labelText: 'Pledge Rate (₹ per gram)',
                   prefixIcon: Icon(Icons.currency_rupee),
+                ),
+                validator: _validateNonNegativeDecimal,
+              ),
+              const SizedBox(height: 24),
+              _sectionTitle('Starting Pledge Number'),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _startingPledgeNoController,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: 'First Pledge Number',
+                  prefixIcon: Icon(Icons.tag),
+                  helperText: 'New pledges will be numbered from here',
+                ),
+                validator: (value) {
+                  final n = int.tryParse(value?.trim() ?? '');
+                  if (n == null || n <= 0) return 'Enter a valid pledge number.';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+              _sectionTitle('Opening Balances'),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _openingCashController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_decimalFormatter],
+                decoration: const InputDecoration(
+                  labelText: 'Opening Cash Balance (₹)',
+                  prefixIcon: Icon(Icons.money),
+                ),
+                validator: _validateNonNegativeDecimal,
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _openingUpiController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_decimalFormatter],
+                decoration: const InputDecoration(
+                  labelText: 'Opening UPI Balance (₹)',
+                  prefixIcon: Icon(Icons.phone_android),
                 ),
                 validator: _validateNonNegativeDecimal,
               ),
@@ -281,9 +341,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
 
   String? _validatePin(String? value) {
     final pin = value?.trim() ?? '';
-    if (pin.length < 4 || pin.length > 6) {
-      return 'Enter a 4 to 6 digit PIN.';
-    }
+    if (pin.length != 6) return 'PIN must be exactly 6 digits.';
     return null;
   }
 
@@ -313,6 +371,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   }
 
   static final _pinFormatter = FilteringTextInputFormatter.digitsOnly;
+  static final _pinLengthFormatter = LengthLimitingTextInputFormatter(6);
   static final _decimalFormatter = FilteringTextInputFormatter.allow(
     RegExp(r'^\d+\.?\d{0,2}'),
   );

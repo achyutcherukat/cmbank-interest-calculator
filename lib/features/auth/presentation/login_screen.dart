@@ -15,12 +15,18 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _pinController = TextEditingController();
+  final _adminPinController = TextEditingController();
   final _authRepository = AuthRepository();
 
   bool _isChecking = true;
   bool _isAuthenticating = false;
   bool _canUseBiometrics = false;
+  bool _useAdminPin = false;
   String? _errorText;
+
+  static final _inputFormatters = [
+    FilteringTextInputFormatter.digitsOnly,
+  ];
 
   @override
   void initState() {
@@ -31,6 +37,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void dispose() {
     _pinController.dispose();
+    _adminPinController.dispose();
     super.dispose();
   }
 
@@ -44,19 +51,14 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _canUseBiometrics = false;
-          _isChecking = false;
-        });
-      }
+      if (mounted) setState(() => _isChecking = false);
     }
   }
 
   Future<void> _unlockWithPin() async {
     final pin = _pinController.text.trim();
-    if (pin.length < 4) {
-      setState(() => _errorText = 'Enter your PIN.');
+    if (pin.length != 6) {
+      setState(() => _errorText = 'Enter your 6-digit PIN.');
       return;
     }
 
@@ -67,14 +69,37 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final valid = await _authRepository.verifyCommonPin(pin);
     if (!mounted) return;
-
     setState(() => _isAuthenticating = false);
 
     if (valid) {
       widget.onAuthenticated();
     } else {
       _pinController.clear();
-      setState(() => _errorText = 'Incorrect PIN.');
+      setState(() => _errorText = 'Incorrect PIN. Try admin PIN if needed.');
+    }
+  }
+
+  Future<void> _unlockWithAdminPin() async {
+    final pin = _adminPinController.text.trim();
+    if (pin.length != 6) {
+      setState(() => _errorText = 'Enter your 6-digit admin PIN.');
+      return;
+    }
+
+    setState(() {
+      _isAuthenticating = true;
+      _errorText = null;
+    });
+
+    final valid = await _authRepository.verifyAdminPin(pin);
+    if (!mounted) return;
+    setState(() => _isAuthenticating = false);
+
+    if (valid) {
+      widget.onAuthenticated();
+    } else {
+      _adminPinController.clear();
+      setState(() => _errorText = 'Incorrect admin PIN.');
     }
   }
 
@@ -97,6 +122,15 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isAuthenticating = false);
     }
+  }
+
+  void _toggleAdminPin() {
+    setState(() {
+      _useAdminPin = !_useAdminPin;
+      _errorText = null;
+      _pinController.clear();
+      _adminPinController.clear();
+    });
   }
 
   @override
@@ -127,53 +161,131 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 34),
-                  TextField(
-                    controller: _pinController,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    textInputAction: TextInputAction.done,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(6),
-                    ],
-                    style: const TextStyle(fontSize: 24),
-                    decoration: InputDecoration(
-                      labelText: 'Common PIN',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      errorText: _errorText,
+
+                  if (!_useAdminPin) ...[
+                    TextField(
+                      controller: _pinController,
+                      obscureText: true,
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.done,
+                      inputFormatters: [
+                        ..._inputFormatters,
+                        LengthLimitingTextInputFormatter(6),
+                      ],
+                      style: const TextStyle(fontSize: 24),
+                      decoration: InputDecoration(
+                        labelText: 'Staff PIN (6 digits)',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        errorText: _errorText,
+                      ),
+                      onSubmitted: (_) => _unlockWithPin(),
                     ),
-                    onSubmitted: (_) => _unlockWithPin(),
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton.icon(
-                    onPressed: _isAuthenticating ? null : _unlockWithPin,
-                    icon: _isAuthenticating
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.login),
-                    label: Text(_isAuthenticating ? 'UNLOCKING' : 'UNLOCK'),
-                  ),
-                  if (_canUseBiometrics) ...[
-                    const SizedBox(height: 14),
-                    OutlinedButton.icon(
-                      onPressed: _isChecking || _isAuthenticating
-                          ? null
-                          : _unlockWithBiometrics,
-                      icon: const Icon(Icons.fingerprint),
-                      label: const Text('USE FINGERPRINT'),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 56),
-                        foregroundColor: CMBankTheme.primary,
-                        side: const BorderSide(
-                          color: CMBankTheme.primary,
-                          width: 1.5,
+                    const SizedBox(height: 20),
+                    ElevatedButton.icon(
+                      onPressed: _isAuthenticating ? null : _unlockWithPin,
+                      icon: _isAuthenticating
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.login),
+                      label: Text(_isAuthenticating ? 'UNLOCKING…' : 'UNLOCK'),
+                    ),
+                    if (_canUseBiometrics) ...[
+                      const SizedBox(height: 14),
+                      OutlinedButton.icon(
+                        onPressed: _isChecking || _isAuthenticating
+                            ? null
+                            : _unlockWithBiometrics,
+                        icon: const Icon(Icons.fingerprint),
+                        label: const Text('USE FINGERPRINT'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 56),
+                          foregroundColor: CMBankTheme.primary,
+                          side: const BorderSide(
+                            color: CMBankTheme.primary,
+                            width: 1.5,
+                          ),
                         ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    TextButton(
+                      onPressed: _toggleAdminPin,
+                      child: const Text(
+                        'Forgot PIN? Use Admin PIN',
+                        style: TextStyle(fontSize: 17, color: Colors.grey),
+                      ),
+                    ),
+                  ] else ...[
+                    // Admin PIN mode
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8EAF6),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: CMBankTheme.primary),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.admin_panel_settings,
+                              color: CMBankTheme.primary, size: 22),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Enter the Admin PIN to unlock.',
+                              style: TextStyle(fontSize: 17),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextField(
+                      controller: _adminPinController,
+                      obscureText: true,
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.done,
+                      inputFormatters: [
+                        ..._inputFormatters,
+                        LengthLimitingTextInputFormatter(6),
+                      ],
+                      style: const TextStyle(fontSize: 24),
+                      decoration: InputDecoration(
+                        labelText: 'Admin PIN (6 digits)',
+                        prefixIcon:
+                            const Icon(Icons.admin_panel_settings_outlined),
+                        errorText: _errorText,
+                      ),
+                      onSubmitted: (_) => _unlockWithAdminPin(),
+                    ),
+                    const SizedBox(height: 20),
+                    ElevatedButton.icon(
+                      onPressed:
+                          _isAuthenticating ? null : _unlockWithAdminPin,
+                      icon: _isAuthenticating
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.login),
+                      label: Text(
+                          _isAuthenticating ? 'UNLOCKING…' : 'UNLOCK WITH ADMIN PIN'),
+                    ),
+                    const SizedBox(height: 14),
+                    TextButton(
+                      onPressed: _toggleAdminPin,
+                      child: const Text(
+                        '← Back to Staff PIN',
+                        style: TextStyle(fontSize: 17, color: Colors.grey),
                       ),
                     ),
                   ],

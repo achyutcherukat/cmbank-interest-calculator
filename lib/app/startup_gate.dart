@@ -13,15 +13,40 @@ class StartupGate extends StatefulWidget {
   State<StartupGate> createState() => _StartupGateState();
 }
 
-class _StartupGateState extends State<StartupGate> {
+class _StartupGateState extends State<StartupGate> with WidgetsBindingObserver {
   final AppSettingsRepository _settingsRepository = AppSettingsRepository();
   late Future<bool> _isFirstLaunchComplete;
   bool _isAuthenticated = false;
+  DateTime? _backgroundedAt;
+
+  static const _lockTimeout = Duration(minutes: 30);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _isFirstLaunchComplete = _loadFirstLaunchState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _backgroundedAt = DateTime.now();
+    } else if (state == AppLifecycleState.resumed && _isAuthenticated) {
+      final bg = _backgroundedAt;
+      if (bg != null &&
+          DateTime.now().difference(bg) >= _lockTimeout) {
+        setState(() => _isAuthenticated = false);
+      }
+      _backgroundedAt = null;
+    }
   }
 
   Future<bool> _loadFirstLaunchState() async {
@@ -51,6 +76,10 @@ class _StartupGateState extends State<StartupGate> {
     setState(() => _isAuthenticated = true);
   }
 
+  void _handleLock() {
+    setState(() => _isAuthenticated = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<bool>(
@@ -61,7 +90,7 @@ class _StartupGateState extends State<StartupGate> {
         }
 
         if (snapshot.data == true && _isAuthenticated) {
-          return const HomeScreen();
+          return HomeScreen(onLock: _handleLock);
         }
 
         if (snapshot.data == true) {
