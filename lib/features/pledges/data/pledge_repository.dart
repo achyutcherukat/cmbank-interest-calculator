@@ -133,6 +133,33 @@ class PledgeRepository {
     });
   }
 
+  // Migrated pledge: no loan_disbursed transaction, no counter advance
+  Future<int> createMigratedPledge(
+    PledgeModel pledge,
+    List<PledgeItemModel> items,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    final now = DateTime.now().toIso8601String();
+
+    return db.transaction((txn) async {
+      final pledgeMap = pledge.toMap();
+      pledgeMap['source'] = 'migrated';
+      pledgeMap['status'] = 'open';
+      pledgeMap['created_at'] = now;
+      pledgeMap['updated_at'] = now;
+      final pledgeId = await txn.insert('pledges', pledgeMap);
+
+      for (final item in items) {
+        final itemMap = item.toMap();
+        itemMap['pledge_id'] = pledgeId;
+        itemMap['created_at'] = now;
+        await txn.insert('pledge_items', itemMap);
+      }
+
+      return pledgeId;
+    });
+  }
+
   // ─── Read ─────────────────────────────────────────────────────────────────
 
   Future<PledgeModel?> getPledgeByNumber(String number) async {
@@ -159,6 +186,19 @@ class PledgeRepository {
     return PledgeModel.fromMap(rows.first);
   }
 
+  Future<PledgeModel?> getSuccessorPledge(int pledgeId) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'pledges',
+      where: 'renewal_parent_id = ?',
+      whereArgs: [pledgeId],
+      orderBy: 'id ASC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return PledgeModel.fromMap(rows.first);
+  }
+
   Future<List<PledgeModel>> getOpenPledges({int limit = 50}) async {
     final db = await AppDatabase.instance.database;
     final rows = await db.query(
@@ -175,10 +215,21 @@ class PledgeRepository {
     final rows = await db.query(
       'pledges',
       where: "status IN ('closed', 'renewed', 'migrated')",
-      orderBy: 'id DESC',
+      orderBy: 'closure_date DESC, id DESC',
       limit: limit,
     );
     return rows.map(PledgeModel.fromMap).toList();
+  }
+
+  Future<Map<String, dynamic>?> getCustomerById(int id) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'customers',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
   }
 
   Future<List<PledgeItemModel>> getItemsForPledge(int pledgeId) async {
@@ -215,7 +266,9 @@ class PledgeRepository {
           'status': 'closed',
           'closed_at': now,
           'closure_date': now.substring(0, 10),
-          'total_interest_paid': payment.amount - (await _getPrincipal(txn, pledgeId)),
+          'total_interest_paid': payment.interestAmount > 0
+              ? payment.interestAmount
+              : (payment.amount - (await _getPrincipal(txn, pledgeId))),
           'total_amount_collected': payment.amount,
           'updated_at': now,
         },
@@ -250,8 +303,13 @@ class PledgeRepository {
   Future<String> renewPledge(
     int oldPledgeId,
     double newLoanAmount,
-    PaymentModel? interestPayment,
-  ) async {
+    PaymentModel? interestPayment, {
+    bool disburseLoan = false,
+    double totalInterestPaid = 0.0,
+    double totalAmountCollected = 0.0,
+    double? loanDisbursement,
+    String disbursementMode = 'cash',
+  }) async {
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toIso8601String();
 
@@ -268,6 +326,8 @@ class PledgeRepository {
           'status': 'renewed',
           'closed_at': now,
           'closure_date': now.substring(0, 10),
+          'total_interest_paid': totalInterestPaid.round(),
+          'total_amount_collected': totalAmountCollected.round(),
           'updated_at': now,
         },
         where: 'id = ?',
@@ -299,7 +359,7 @@ class PledgeRepository {
       final newPledgeId = await txn.insert('pledges', newPledgeMap);
 
       // Copy items to new pledge
-      final items = await db.query(
+      final items = await txn.query(
         'pledge_items',
         where: 'pledge_id = ?',
         whereArgs: [oldPledgeId],
@@ -335,6 +395,28 @@ class PledgeRepository {
           'created_by': null,
           'created_at': now,
         });
+      }
+
+      // Loan disbursement for increase-loan renewals (net: new - old - interest)
+      if (disburseLoan) {
+        final disburse =
+            loanDisbursement ?? (newLoanAmount - oldPledge.loanAmount);
+        if (disburse > 0) {
+          await txn.insert('transactions', {
+            'transaction_date': now.substring(0, 10),
+            'type': 'loan_disbursed',
+            'direction': 'out',
+            'amount': disburse,
+            'mode': disbursementMode,
+            'pledge_id': newPledgeId,
+            'payment_id': null,
+            'expense_category_id': null,
+            'description':
+                'Loan increase for pledge #${oldPledge.pledgeNumber} → #$newNumber',
+            'created_by': null,
+            'created_at': now,
+          });
+        }
       }
 
       // Advance pledge number counter

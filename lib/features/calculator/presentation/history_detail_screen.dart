@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../shared/widgets/flow_widgets.dart';
+
 class HistoryDetailScreen extends StatelessWidget {
   final Map<String, dynamic> entry;
 
@@ -14,13 +16,13 @@ class HistoryDetailScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A237E),
+        backgroundColor: FlowColors.primary,
         title: const Text('Calculation Detail',
             style: TextStyle(
-                color: Colors.white,
+                color: FlowColors.textOnNavyLarge,
                 fontSize: 26,
-                fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: Colors.white, size: 30),
+                fontWeight: FontWeight.w600)),
+        iconTheme: const IconThemeData(color: FlowColors.goldRich, size: 30),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -48,7 +50,7 @@ class HistoryDetailScreen extends StatelessWidget {
               decoration: _cardDecoration(),
               child: Column(
                 children: [
-                  _detailRow('Principal Amount', '₹ ${principal.toStringAsFixed(2)}'),
+                  _detailRow('Principal Amount', money(principal)),
                   _divider(),
                   _detailRow('From Date', entry['fromDate']),
                   _divider(),
@@ -71,7 +73,7 @@ class HistoryDetailScreen extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF3949AB), width: 1.5),
+                  border: Border.all(color: FlowColors.primaryLight, width: 1.5),
                 ),
                 child: Text(
                   entry['notes'].toString(),
@@ -89,22 +91,22 @@ class HistoryDetailScreen extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: const Color(0xFFE8EAF6),
+                color: FlowColors.accent,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF3949AB), width: 1.5),
+                border: Border.all(color: FlowColors.primaryLight, width: 1.5),
               ),
               child: Column(
                 children: [
-                  _detailRow('Simple Interest', '₹ ${si.toStringAsFixed(2)}',
-                      valueColor: const Color(0xFF1A237E)),
+                  _detailRow('Simple Interest', money(si),
+                      valueColor: FlowColors.primary),
                   _divider(),
-                  _detailRow('Total Amount', '₹ ${total.toStringAsFixed(2)}',
-                      valueColor: const Color(0xFF1A237E), bold: true),
+                  _detailRow('Total Amount', money(total),
+                      valueColor: FlowColors.primary, bold: true),
                   if (note.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Icon(Icons.info_outline,
+                        const Icon(Icons.info,
                             color: Colors.orange, size: 22),
                         const SizedBox(width: 8),
                         Expanded(
@@ -135,7 +137,7 @@ class HistoryDetailScreen extends StatelessWidget {
         style: const TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
-            color: Color(0xFF1A237E)));
+            color: FlowColors.primary));
   }
 
   Widget _detailRow(String label, String value,
@@ -163,7 +165,7 @@ class HistoryDetailScreen extends StatelessWidget {
     return BoxDecoration(
       color: Colors.white,
       borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: const Color(0xFF3949AB), width: 1.5),
+      border: Border.all(color: FlowColors.primaryLight, width: 1.5),
       boxShadow: [
         BoxShadow(
           color: Colors.grey.withValues(alpha: 0.15),
@@ -176,13 +178,9 @@ class HistoryDetailScreen extends StatelessWidget {
 
   String _formatDateTime(String iso) {
     final dt = DateTime.parse(iso);
-    const months = [
-      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
     final hour = dt.hour > 12 ? dt.hour - 12 : dt.hour == 0 ? 12 : dt.hour;
     final ampm = dt.hour >= 12 ? 'PM' : 'AM';
     final min = dt.minute.toString().padLeft(2, '0');
-    return '${dt.day.toString().padLeft(2, '0')} ${months[dt.month]} ${dt.year} at $hour:$min $ampm';
+    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} at $hour:$min $ampm';
   }
 }

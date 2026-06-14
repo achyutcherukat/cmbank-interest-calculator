@@ -90,7 +90,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.light(
-            primary: Color(0xFF1A237E),
+            primary: FlowColors.primary,
             onPrimary: Colors.white,
             onSurface: Colors.black,
           ),
@@ -190,7 +190,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF1A237E))),
+                    color: FlowColors.primary)),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -201,9 +201,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE8EAF6),
+                      color: FlowColors.accent,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF3949AB)),
+                      border: Border.all(color: FlowColors.primaryLight),
                     ),
                     child: Column(
                       children: [
@@ -228,7 +228,6 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     style: const TextStyle(fontSize: 20),
                     decoration: InputDecoration(
-                      hintText: 'e.g. 3201',
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8)),
                     ),
@@ -277,7 +276,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.error_outline,
+                        const Icon(Icons.error,
                             color: Colors.red, size: 20),
                         const SizedBox(width: 6),
                         Expanded(
@@ -301,7 +300,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1A237E)),
+                    backgroundColor: FlowColors.primary),
                 onPressed: isSaving
                     ? null
                     : () async {
@@ -353,6 +352,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                           Navigator.pop(ctx);
 
                           if (mounted) {
+                            _resetFields();
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
@@ -375,10 +375,10 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
+                            strokeWidth: 2, color: FlowColors.textOnNavyLarge),
                       )
                     : const Text('CONFIRM CLOSE',
-                        style: TextStyle(fontSize: 16, color: Colors.white)),
+                        style: TextStyle(fontSize: 16, color: FlowColors.textOnNavySmall)),
               ),
             ],
           );
@@ -397,7 +397,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             style: TextStyle(
                 fontSize: 16,
                 fontWeight: bold ? FontWeight.bold : FontWeight.w600,
-                color: const Color(0xFF1A237E))),
+                color: FlowColors.primary)),
       ],
     );
   }
@@ -408,24 +408,49 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     required bool selected,
     required VoidCallback onTap,
   }) {
+    Widget iconWidget = value == 'cash'
+        ? const Icon(Icons.payments, size: 18, color: FlowColors.primary)
+        : const Icon(Icons.qr_code_scanner, size: 18, color: FlowColors.primary);
+
     return OutlinedButton(
       onPressed: onTap,
       style: OutlinedButton.styleFrom(
-        backgroundColor: selected ? const Color(0xFFE8EAF6) : Colors.white,
+        backgroundColor: selected ? FlowColors.accent : Colors.white,
         side: BorderSide(
-            color: selected
-                ? const Color(0xFF1A237E)
-                : Colors.black26,
+            color: selected ? FlowColors.primary : Colors.black26,
             width: 2),
         padding: const EdgeInsets.symmetric(vertical: 14),
       ),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 16,
-              fontWeight:
-                  selected ? FontWeight.bold : FontWeight.normal,
-              color: const Color(0xFF1A237E))),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          iconWidget,
+          const SizedBox(width: 6),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight:
+                      selected ? FontWeight.bold : FontWeight.normal,
+                  color: FlowColors.primary)),
+        ],
+      ),
     );
+  }
+
+  void _resetFields() {
+    final today = DateTime.now();
+    setState(() {
+      _principalController.clear();
+      _fromDateController.clear();
+      _toDateController.text = _formatDate(today);
+      _fromDate = null;
+      _toDate = today;
+      _numberOfDays = null;
+      _simpleInterest = 0.0;
+      _totalAmount = 0.0;
+      _minimumChargeNote = '';
+      _hasResult = false;
+    });
   }
 
   void _showError(String message) {
@@ -439,7 +464,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('OK',
-                style: TextStyle(fontSize: 18, color: Color(0xFF1A237E))),
+                style: TextStyle(fontSize: 18, color: FlowColors.primary)),
           ),
         ],
       ),
@@ -450,16 +475,16 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A237E),
-        iconTheme: const IconThemeData(color: Colors.white, size: 30),
+        backgroundColor: FlowColors.primary,
+        iconTheme: const IconThemeData(color: FlowColors.goldRich, size: 30),
         title: const Text('Interest Calculator',
             style: TextStyle(
-                color: Colors.white,
+                color: FlowColors.textOnNavyLarge,
                 fontSize: 24,
-                fontWeight: FontWeight.bold)),
+                fontWeight: FontWeight.w600)),
         actions: [
           IconButton(
-            icon: const Icon(Icons.history, color: Colors.white, size: 30),
+            icon: const Icon(Icons.history, color: FlowColors.goldRich, size: 30),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const HistoryScreen()),
@@ -478,16 +503,13 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             const SizedBox(height: 8),
             TextField(
               controller: _principalController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
-              ],
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               style: const TextStyle(fontSize: 22),
               decoration: const InputDecoration(
                 prefixText: '₹  ',
                 prefixStyle: TextStyle(fontSize: 22, color: Colors.black87),
-                hintText: '0.00',
+                hintText: '0',
                 hintStyle: TextStyle(fontSize: 22, color: Colors.grey),
               ),
               onChanged: (_) => setState(() {
@@ -506,8 +528,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 hintStyle:
                     const TextStyle(fontSize: 20, color: Colors.grey),
                 suffixIcon: IconButton(
-                  icon: const Icon(Icons.calendar_today,
-                      color: Color(0xFF1A237E), size: 28),
+                  icon: const Icon(Icons.calendar_month,
+                      color: FlowColors.primary, size: 28),
                   onPressed: () => _pickDate(true),
                 ),
               ),
@@ -525,8 +547,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 hintStyle:
                     const TextStyle(fontSize: 20, color: Colors.grey),
                 suffixIcon: IconButton(
-                  icon: const Icon(Icons.calendar_today,
-                      color: Color(0xFF1A237E), size: 28),
+                  icon: const Icon(Icons.calendar_month,
+                      color: FlowColors.primary, size: 28),
                   onPressed: () => _pickDate(false),
                 ),
               ),
@@ -547,14 +569,13 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               height: 64,
               child: ElevatedButton.icon(
                 onPressed: _calculate,
-                icon: const Icon(Icons.calculate_outlined, size: 26),
+                icon: const Icon(Icons.calculate, size: 26),
                 label: const Text('CALCULATE',
                     style: TextStyle(
                         fontSize: 20, fontWeight: FontWeight.bold)),
                 style: ElevatedButton.styleFrom(
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
-                  alignment: Alignment.centerLeft,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                 ),
               ),
@@ -562,25 +583,12 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             // Result card comes first
             if (_hasResult) ...[
               const SizedBox(height: 28),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: FlowColors.accent,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                      color: FlowColors.primaryLight, width: 1.5),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Color(0x0D000000),
-                        blurRadius: 8,
-                        offset: Offset(0, 2))
-                  ],
-                ),
+              FlowCard(
+                backgroundColor: FlowColors.accent,
+                header: 'Calculation Result',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const FlowCardTitle('Calculation Result'),
                     _resultRow('Simple Interest', money(_simpleInterest)),
                     const Divider(height: 24, thickness: 1),
                     _resultRow('Total Amount', money(_totalAmount), bold: true),
@@ -588,7 +596,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                       const SizedBox(height: 12),
                       Row(
                         children: [
-                          const Icon(Icons.info_outline,
+                          const Icon(Icons.info,
                               color: Colors.orange, size: 22),
                           const SizedBox(width: 8),
                           Expanded(
@@ -613,7 +621,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 height: 58,
                 child: ElevatedButton.icon(
                   onPressed: _showClosePledgeDialog,
-                  icon: const Icon(Icons.lock_outline, size: 24),
+                  icon: const Icon(Icons.lock, size: 24),
                   label: const Text('CLOSE PLEDGE',
                       style: TextStyle(
                           fontSize: 20, fontWeight: FontWeight.bold)),
@@ -638,7 +646,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         style: const TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w600,
-            color: Color(0xFF1A237E)),
+            color: FlowColors.primary),
       );
 
   Widget _resultRow(String label, String value, {bool bold = false}) => Row(
@@ -653,7 +661,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               style: TextStyle(
                   fontSize: 22,
                   fontWeight: bold ? FontWeight.bold : FontWeight.w600,
-                  color: const Color(0xFF1A237E))),
+                  color: FlowColors.primary)),
         ],
       );
 }

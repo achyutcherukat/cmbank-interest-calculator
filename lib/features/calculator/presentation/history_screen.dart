@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 
+import '../../../shared/widgets/flow_widgets.dart';
+
 import '../data/calc_history_repository.dart';
 import 'history_detail_screen.dart';
 
@@ -110,11 +112,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final d = DateTime(dt.year, dt.month, dt.day);
     if (d == today) return 'Today';
     if (d == yesterday) return 'Yesterday';
-    const months = [
-      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    return '${dt.day.toString().padLeft(2, '0')} ${months[dt.month]} ${dt.year}';
+    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
   }
 
   @override
@@ -124,17 +122,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A237E),
+        backgroundColor: FlowColors.primary,
         title: const Text('History',
             style: TextStyle(
-                color: Colors.white,
+                color: FlowColors.textOnNavyLarge,
                 fontSize: 26,
-                fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: Colors.white, size: 30),
+                fontWeight: FontWeight.w600)),
+        iconTheme: const IconThemeData(color: FlowColors.goldRich, size: 30),
         actions: [
           if (_allHistory.isNotEmpty)
             IconButton(
-              icon: const Icon(Icons.delete_sweep, color: Colors.white, size: 30),
+              icon: const Icon(Icons.delete_forever, color: FlowColors.goldRich, size: 30),
               tooltip: 'Clear All',
               onPressed: _confirmClearAll,
             ),
@@ -172,7 +170,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A237E)),
+                            color: FlowColors.primary),
                       ),
                     ),
                     ...entries.map((entry) {
@@ -210,7 +208,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
-                                    color: const Color(0xFF3949AB), width: 1.5),
+                                    color: FlowColors.primaryLight, width: 1.5),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.grey.withValues(alpha: 0.15),
@@ -227,14 +225,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                         MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
-                                        '₹ ${double.parse(entry['principal'].toString()).toStringAsFixed(2)}',
+                                        money(double.parse(entry['principal'].toString())),
                                         style: const TextStyle(
                                             fontSize: 22,
                                             fontWeight: FontWeight.bold,
-                                            color: Color(0xFF1A237E)),
+                                            color: FlowColors.primary),
                                       ),
                                       Text(
-                                        'SI: ₹ ${double.parse(entry['simpleInterest'].toString()).toStringAsFixed(2)}',
+                                        'SI: ${money(double.parse(entry['simpleInterest'].toString()))}',
                                         style: const TextStyle(
                                             fontSize: 18,
                                             fontWeight: FontWeight.w600,
@@ -265,8 +263,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                         style: const TextStyle(
                                             fontSize: 16, color: Colors.grey),
                                       ),
-                                      const Icon(Icons.chevron_right,
-                                          color: Colors.grey, size: 24),
+                                      const Icon(Icons.arrow_forward_ios,
+                                          color: Colors.grey, size: 20),
                                     ],
                                   ),
                                   if (entry['notes'] != null &&
@@ -274,8 +272,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     const SizedBox(height: 6),
                                     Row(
                                       children: [
-                                        const Icon(Icons.note_outlined,
-                                            color: Color(0xFF1A237E), size: 18),
+                                        const Icon(Icons.sticky_note_2,
+                                            color: FlowColors.primary, size: 18),
                                         const SizedBox(width: 6),
                                         Expanded(
                                           child: Text(
@@ -298,7 +296,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     const SizedBox(height: 6),
                                     Row(
                                       children: [
-                                        const Icon(Icons.info_outline,
+                                        const Icon(Icons.info,
                                             color: Colors.orange, size: 18),
                                         const SizedBox(width: 6),
                                         Text(

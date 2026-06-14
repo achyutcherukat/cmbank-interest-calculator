@@ -1,6 +1,11 @@
 class InterestCalculator {
   const InterestCalculator._();
 
+  // Rounds value UP to the nearest multiple of 5 (e.g. 82→85, 87→90, 90→90)
+  static double _roundUpTo5(double value) {
+    return (value / 5).ceil() * 5.0;
+  }
+
   static ({double interest, double total, String note}) calculate({
     required double principal,
     required DateTime fromDate,
@@ -17,8 +22,9 @@ class InterestCalculator {
       note = 'Minimum 7 days applied';
     }
 
-    final double interest =
+    final double rawInterest =
         (principal * effectiveDays / 360) * (ratePercent / 100);
+    final double interest = _roundUpTo5(rawInterest);
 
     if (interest < 50.0) {
       return (

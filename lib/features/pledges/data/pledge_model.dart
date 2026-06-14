@@ -1,3 +1,14 @@
+import 'dart:convert';
+
+List<String>? _parseJsonList(String? json) {
+  if (json == null || json.isEmpty) return null;
+  try {
+    return (jsonDecode(json) as List).cast<String>();
+  } catch (_) {
+    return null;
+  }
+}
+
 class PledgeModel {
   const PledgeModel({
     this.id,
@@ -12,8 +23,10 @@ class PledgeModel {
     this.source,
     this.renewalParentId,
     this.notes,
+    this.formPhotoPaths,
     required this.createdAt,
     required this.customerName,
+    this.customerId,
     this.customerPhone,
     this.customerAddress,
     this.grossWeight = 0.0,
@@ -21,11 +34,12 @@ class PledgeModel {
     this.purity = '22K',
     this.goldRate = 0.0,
     this.pledgeRate = 0.0,
+    this.actualItemValue = 0.0,
   });
 
   final int? id;
   final String pledgeNumber;    // DB: pledge_no
-  final String pledgeDate;      // DB: start_date (ISO 8601 date string YYYY-MM-DD)
+  final String pledgeDate;      // DB: start_date (ISO 8601 YYYY-MM-DD)
   final double loanAmount;      // DB: principal_amount
   final double interestRate;
   final String status;          // open / closed / renewed / migrated
@@ -35,8 +49,10 @@ class PledgeModel {
   final String? source;
   final int? renewalParentId;
   final String? notes;
+  final List<String>? formPhotoPaths;
   final String createdAt;
   final String customerName;
+  final int? customerId;        // DB: customer_id (FK to customers)
   final String? customerPhone;
   final String? customerAddress;
   final double grossWeight;
@@ -44,6 +60,7 @@ class PledgeModel {
   final String purity;
   final double goldRate;
   final double pledgeRate;
+  final double actualItemValue; // gold_rate × net_weight
 
   factory PledgeModel.fromMap(Map<String, dynamic> map) {
     return PledgeModel(
@@ -61,8 +78,10 @@ class PledgeModel {
       source: map['source'] as String?,
       renewalParentId: map['renewal_parent_id'] as int?,
       notes: map['notes'] as String?,
+      formPhotoPaths: _parseJsonList(map['form_photo_paths'] as String?),
       createdAt: map['created_at'] as String? ?? '',
       customerName: map['customer_name'] as String? ?? '',
+      customerId: map['customer_id'] as int?,
       customerPhone: map['customer_phone'] as String?,
       customerAddress: map['customer_address'] as String?,
       grossWeight: (map['gross_weight'] as num?)?.toDouble() ?? 0.0,
@@ -70,6 +89,8 @@ class PledgeModel {
       purity: map['purity'] as String? ?? '22K',
       goldRate: (map['gold_rate'] as num?)?.toDouble() ?? 0.0,
       pledgeRate: (map['pledge_rate'] as num?)?.toDouble() ?? 0.0,
+      actualItemValue:
+          (map['actual_item_value'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -77,6 +98,7 @@ class PledgeModel {
     return {
       if (id != null) 'id': id,
       'pledge_no': pledgeNumber,
+      'customer_id': customerId,
       'customer_name': customerName,
       'customer_phone': customerPhone,
       'customer_address': customerAddress,
@@ -86,6 +108,7 @@ class PledgeModel {
       'purity': purity,
       'gold_rate': goldRate,
       'pledge_rate': pledgeRate,
+      'actual_item_value': actualItemValue,
       'principal_amount': loanAmount,
       'interest_rate': interestRate,
       'start_date': pledgeDate,
@@ -97,6 +120,8 @@ class PledgeModel {
       'total_interest_paid': totalInterestPaid,
       'total_amount_collected': totalAmountCollected,
       'notes': notes,
+      'form_photo_paths':
+          formPhotoPaths != null ? jsonEncode(formPhotoPaths!) : null,
       'created_by': null,
       'created_at': createdAt,
       'updated_at': createdAt,
@@ -108,6 +133,7 @@ class PledgeModel {
     String? closureDate,
     double? totalInterestPaid,
     double? totalAmountCollected,
+    List<String>? formPhotoPaths,
   }) {
     return PledgeModel(
       id: id,
@@ -123,8 +149,10 @@ class PledgeModel {
       source: source,
       renewalParentId: renewalParentId,
       notes: notes,
+      formPhotoPaths: formPhotoPaths ?? this.formPhotoPaths,
       createdAt: createdAt,
       customerName: customerName,
+      customerId: customerId,
       customerPhone: customerPhone,
       customerAddress: customerAddress,
       grossWeight: grossWeight,
@@ -132,6 +160,7 @@ class PledgeModel {
       purity: purity,
       goldRate: goldRate,
       pledgeRate: pledgeRate,
+      actualItemValue: actualItemValue,
     );
   }
 }

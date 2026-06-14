@@ -27,6 +27,8 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   final _startingPledgeNoController = TextEditingController(text: '3200');
   final _openingCashController = TextEditingController(text: '0');
   final _openingUpiController = TextEditingController(text: '0');
+  final _openingStockWeightController = TextEditingController(text: '0');
+  final _openingStockCountController = TextEditingController(text: '0');
   final _settingsRepository = AppSettingsRepository();
 
   bool _isSaving = false;
@@ -44,6 +46,8 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
     _startingPledgeNoController.dispose();
     _openingCashController.dispose();
     _openingUpiController.dispose();
+    _openingStockWeightController.dispose();
+    _openingStockCountController.dispose();
     super.dispose();
   }
 
@@ -83,6 +87,14 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
         'opening_upi': (
           value: _openingUpiController.text.trim(),
           type: 'double',
+        ),
+        'opening_stock_weight': (
+          value: _openingStockWeightController.text.trim(),
+          type: 'double',
+        ),
+        'opening_stock_count': (
+          value: _openingStockCountController.text.trim(),
+          type: 'int',
         ),
         'first_launch_completed': (value: 'true', type: 'bool'),
         'biometric_enabled': (
@@ -128,13 +140,13 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: CMBankTheme.primary,
+        backgroundColor: CMBColors.navy,
         title: const Text(
           'First Setup',
           style: TextStyle(
-            color: Colors.white,
+            color: CMBColors.textOnNavyLarge,
             fontSize: 24,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),
@@ -195,7 +207,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
                   labelText: 'Admin PIN',
-                  prefixIcon: Icon(Icons.admin_panel_settings_outlined),
+                  prefixIcon: Icon(Icons.admin_panel_settings),
                 ),
                 validator: _validatePin,
               ),
@@ -208,7 +220,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
                   labelText: 'Confirm Admin PIN',
-                  prefixIcon: Icon(Icons.verified_user_outlined),
+                  prefixIcon: Icon(Icons.verified_user),
                 ),
                 validator: (value) => _validatePinMatch(
                   value,
@@ -218,7 +230,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
               const SizedBox(height: 14),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                activeThumbColor: CMBankTheme.primary,
+                activeThumbColor: CMBColors.goldRich,
                 title: const Text(
                   'Enable fingerprint login',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
@@ -299,6 +311,36 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 ),
                 validator: _validateNonNegativeDecimal,
               ),
+              const SizedBox(height: 24),
+              _sectionTitle('Opening Gold Stock'),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _openingStockWeightController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_decimalFormatter],
+                decoration: const InputDecoration(
+                  labelText: 'Opening Stock Weight (grams)',
+                  prefixIcon: Icon(Icons.balance),
+                  helperText: 'Total gold weight you currently hold',
+                ),
+                validator: _validateNonNegativeDecimal,
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _openingStockCountController,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: 'Opening Item Count',
+                  prefixIcon: Icon(Icons.format_list_numbered),
+                  helperText: 'Number of gold items you currently hold',
+                ),
+                validator: (value) {
+                  final n = int.tryParse(value?.trim() ?? '');
+                  if (n == null || n < 0) return 'Enter a valid item count.';
+                  return null;
+                },
+              ),
               const SizedBox(height: 30),
               ElevatedButton.icon(
                 onPressed: _isSaving ? null : _saveSetup,
@@ -308,7 +350,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                         height: 22,
                         child: CircularProgressIndicator(
                           strokeWidth: 2.5,
-                          color: Colors.white,
+                          color: CMBColors.textOnNavyLarge,
                         ),
                       )
                     : const Icon(Icons.check_circle_outline),
@@ -325,7 +367,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
     return Text(
       title,
       style: const TextStyle(
-        color: CMBankTheme.primary,
+        color: CMBColors.navy,
         fontSize: 20,
         fontWeight: FontWeight.bold,
       ),

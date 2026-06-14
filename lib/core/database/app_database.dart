@@ -11,7 +11,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static const _databaseName = 'cm_bank.db';
-  static const _databaseVersion = 2;
+  static const _databaseVersion = 6;
 
   Database? _database;
 

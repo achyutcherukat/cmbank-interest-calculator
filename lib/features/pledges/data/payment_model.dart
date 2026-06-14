@@ -6,6 +6,8 @@ class PaymentModel {
     required this.amount,
     this.cashAmount = 0.0,
     this.upiAmount = 0.0,
+    this.interestAmount = 0.0,
+    this.principalAmount = 0.0,
     required this.paymentType,
     this.paymentMode = 'cash',
     this.notes,
@@ -18,6 +20,8 @@ class PaymentModel {
   final double amount;
   final double cashAmount;    // DB: cash_amount
   final double upiAmount;     // DB: upi_amount
+  final double interestAmount;  // DB: interest_amount
+  final double principalAmount; // DB: principal_amount
   final String paymentType;   // interest / principal / closure / renewal
   final String paymentMode;   // cash / upi / split / bank
   final String? notes;
@@ -31,6 +35,8 @@ class PaymentModel {
       amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
       cashAmount: (map['cash_amount'] as num?)?.toDouble() ?? 0.0,
       upiAmount: (map['upi_amount'] as num?)?.toDouble() ?? 0.0,
+      interestAmount: (map['interest_amount'] as num?)?.toDouble() ?? 0.0,
+      principalAmount: (map['principal_amount'] as num?)?.toDouble() ?? 0.0,
       paymentType: map['payment_type'] as String? ?? 'closure',
       paymentMode: map['payment_mode'] as String? ?? 'cash',
       notes: map['notes'] as String?,
@@ -46,8 +52,8 @@ class PaymentModel {
       'amount': amount,
       'cash_amount': cashAmount,
       'upi_amount': upiAmount,
-      'interest_amount': 0.0,
-      'principal_amount': 0.0,
+      'interest_amount': interestAmount,
+      'principal_amount': principalAmount,
       'payment_mode': paymentMode,
       'paid_at': paymentDate,
       'notes': notes,

@@ -1,21 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../app/theme.dart';
 import '../../../core/database/app_database.dart';
-import '../../../core/services/gold_rate_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
-import '../../../shared/widgets/flow_widgets.dart';
 import '../../accounts/presentation/daily_accounts_screen.dart';
+import '../../customers/presentation/customer_list_screen.dart';
+import '../../gold_stock/presentation/gold_stock_screen.dart';
 import '../../pledges/presentation/closed_pledges_screen.dart';
+import '../../pledges/presentation/load_existing_pledge_screen.dart';
 import '../../pledges/presentation/new_pledge_screen.dart';
 import '../../pledges/presentation/open_pledge_screen.dart';
 import '../../settings/presentation/settings_screen.dart';
 import '../../admin/presentation/admin_screen.dart';
 import 'calculator_screen.dart';
 
+// ─── Brand colours ────────────────────────────────────────────────────────────
+const _navy     = CMBColors.navy;
+const _gold     = CMBColors.goldRich;
+const _bg       = CMBColors.pageBackground;
+const _tPrimary = CMBColors.textOnLight;
+const _tSec     = Color(0xFF999999);
+const _gdBorder = CMBColors.dividerOnCard;
+const _gdBg8    = Color(0x14D4A843);   // gold 8% tint — no CMBColors equivalent
+
+// ─── HomeScreen ───────────────────────────────────────────────────────────────
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, this.onLock});
-
   final VoidCallback? onLock;
 
   @override
@@ -23,518 +35,465 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _settingsRepository = AppSettingsRepository();
+  final _settings    = AppSettingsRepository();
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  int _openPledgeCount = 0;
-  double _todayCollections = 0.0;
-  Map<String, dynamic>? _goldRates;
-  bool _loadingRates = true;
-  bool _fetchingLive = false;
+  double  _goldRate   = 0;
+  double  _pledgeRate = 0;
+  double  _todayCash  = 0;
+  double  _todayUpi   = 0;
+  String? _lastBackupAt;
+
+  bool _showLowStorageWarning = false;
+  bool _showDriveLowWarning   = false;
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _loadAll();
   }
 
-  Future<void> _loadData() async {
-    await Future.wait([_loadGoldRates(), _loadSummary()]);
+  Future<void> _loadAll() async {
+    await Future.wait([
+      _loadSettings(),
+      _loadTodayAccounts(),
+      _loadBackupStatus(),
+    ]);
   }
 
-  Future<void> _loadGoldRates() async {
-    try {
-      final db = await AppDatabase.instance.database;
-      final today = DateTime.now().toIso8601String().substring(0, 10);
-      final rows = await db.query(
-        'gold_rates',
-        where: 'rate_date = ?',
-        whereArgs: [today],
-        orderBy: 'id DESC',
-        limit: 1,
-      );
-      if (mounted) {
-        setState(() {
-          _goldRates = rows.isNotEmpty ? rows.first : null;
-          _loadingRates = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loadingRates = false);
-    }
-  }
+  // ─── Data loaders ──────────────────────────────────────────────────────────
 
-  Future<void> _loadSummary() async {
-    try {
-      final db = await AppDatabase.instance.database;
-      final today = DateTime.now().toIso8601String().substring(0, 10);
-
-      final countResult = await db.rawQuery(
-          "SELECT COUNT(*) as c FROM pledges WHERE status = 'open'");
-      final payResult = await db.rawQuery(
-          "SELECT COALESCE(SUM(amount),0) as s FROM payments WHERE paid_at LIKE ?",
-          ['$today%']);
-
-      if (mounted) {
-        setState(() {
-          _openPledgeCount = (countResult.first['c'] as int?) ?? 0;
-          _todayCollections =
-              (payResult.first['s'] as num?)?.toDouble() ?? 0.0;
-        });
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _fetchLiveRates() async {
-    setState(() => _fetchingLive = true);
-    try {
-      final result = await GoldRateService.fetchLiveRates();
-      final db = await AppDatabase.instance.database;
-      final today = DateTime.now().toIso8601String().substring(0, 10);
-
-      // Reuse existing pledge_rate for today if already set, else default 75% of 22K
-      double pledgeRate = result.rate22k * 0.75;
-      final existing = await db.query(
-        'gold_rates',
-        where: 'rate_date = ?',
-        whereArgs: [today],
-        orderBy: 'id DESC',
-        limit: 1,
-      );
-      if (existing.isNotEmpty) {
-        final pr = (existing.first['pledge_rate'] as num?)?.toDouble() ?? 0;
-        if (pr > 0) pledgeRate = pr;
-      }
-
-      await db.insert('gold_rates', {
-        'rate_date': today,
-        'rate_24k': result.rate24k,
-        'rate_22k': result.rate22k,
-        'pledge_rate': pledgeRate,
-        'source': 'api',
-        'is_manual': 0,
-        'created_by': null,
-        'created_at': DateTime.now().toIso8601String(),
+  Future<void> _loadSettings() async {
+    final gr = await _settings.getString('gold_rate');
+    final pr = await _settings.getString('default_pledge_rate');
+    if (mounted) {
+      setState(() {
+        _goldRate   = double.tryParse(gr ?? '') ?? 0;
+        _pledgeRate = double.tryParse(pr ?? '') ?? 0;
       });
-      await _loadGoldRates();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Live gold rates updated. Verify pledge rate.'),
-            backgroundColor: FlowColors.primary,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not fetch live rates: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _fetchingLive = false);
     }
   }
 
-  void _showGoldRateDialog() {
-    final rate22kCtrl = TextEditingController(
-        text: _goldRates != null
-            ? (_goldRates!['rate_22k'] as double).toStringAsFixed(0)
-            : '');
-    final rate24kCtrl = TextEditingController(
-        text: _goldRates != null
-            ? (_goldRates!['rate_24k'] as double).toStringAsFixed(0)
-            : '');
-    final pledgeRateCtrl = TextEditingController(
-        text: _goldRates != null
-            ? (_goldRates!['pledge_rate'] as double).toStringAsFixed(0)
-            : '');
+  Future<void> _loadTodayAccounts() async {
+    final db        = await AppDatabase.instance.database;
+    final now       = DateTime.now();
+    final today     = _isoDate(now);
+    final yesterday = _isoDate(now.subtract(const Duration(days: 1)));
 
-    showDialog(
+    double q(List<Map<String, dynamic>> r) => (r.first['s'] as num).toDouble();
+
+    // Opening: yesterday's closing from daily_balance, else rebuild
+    final prev = await db.query('daily_balance',
+        where: 'business_date = ?', whereArgs: [yesterday], limit: 1);
+
+    double opCash, opUpi;
+    if (prev.isNotEmpty) {
+      opCash = (prev.first['closing_cash'] as num).toDouble();
+      opUpi  = (prev.first['closing_upi']  as num).toDouble();
+    } else {
+      opCash = double.tryParse(
+              await _settings.getString('opening_cash') ?? '') ?? 0;
+      opUpi  = double.tryParse(
+              await _settings.getString('opening_upi') ?? '') ?? 0;
+
+      final ci = await db.rawQuery(
+          'SELECT COALESCE(SUM(cash_amount),0) AS s FROM payments WHERE paid_at < ?',
+          [today]);
+      final ui = await db.rawQuery(
+          'SELECT COALESCE(SUM(upi_amount),0) AS s FROM payments WHERE paid_at < ?',
+          [today]);
+      final co = await db.rawQuery(
+          "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
+          "WHERE type IN ('loan_disbursed','expense') AND mode='cash' AND transaction_date < ?",
+          [today]);
+      final uo = await db.rawQuery(
+          "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
+          "WHERE type IN ('loan_disbursed','expense') AND mode='upi' AND transaction_date < ?",
+          [today]);
+      final ca = await db.rawQuery(
+          "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
+          "FROM transactions WHERE type='adjustment' AND mode='cash' AND transaction_date < ?",
+          [today]);
+      final ua = await db.rawQuery(
+          "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
+          "FROM transactions WHERE type='adjustment' AND mode='upi' AND transaction_date < ?",
+          [today]);
+
+      opCash += q(ci) - q(co) + q(ca);
+      opUpi  += q(ui) - q(uo) + q(ua);
+    }
+
+    // Today's movements
+    final cashIn = await db.rawQuery("""
+      SELECT COALESCE(SUM(
+        CASE WHEN p.cash_amount IS NOT NULL AND (p.cash_amount > 0 OR p.upi_amount > 0)
+             THEN p.cash_amount
+             WHEN t.mode='cash' THEN t.amount ELSE 0 END
+      ), 0) AS s
+      FROM transactions t LEFT JOIN payments p ON p.id = t.payment_id
+      WHERE t.type='payment_received' AND t.transaction_date=?""", [today]);
+
+    final upiIn = await db.rawQuery("""
+      SELECT COALESCE(SUM(
+        CASE WHEN p.cash_amount IS NOT NULL AND (p.cash_amount > 0 OR p.upi_amount > 0)
+             THEN p.upi_amount
+             WHEN t.mode='upi' THEN t.amount ELSE 0 END
+      ), 0) AS s
+      FROM transactions t LEFT JOIN payments p ON p.id = t.payment_id
+      WHERE t.type='payment_received' AND t.transaction_date=?""", [today]);
+
+    final cashOut = await db.rawQuery(
+        "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
+        "WHERE type IN ('loan_disbursed','expense') AND mode='cash' AND transaction_date=?",
+        [today]);
+    final upiOut = await db.rawQuery(
+        "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
+        "WHERE type IN ('loan_disbursed','expense') AND mode='upi' AND transaction_date=?",
+        [today]);
+    final adjCash = await db.rawQuery(
+        "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
+        "FROM transactions WHERE type='adjustment' AND mode='cash' AND transaction_date=?",
+        [today]);
+    final adjUpi = await db.rawQuery(
+        "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
+        "FROM transactions WHERE type='adjustment' AND mode='upi' AND transaction_date=?",
+        [today]);
+
+    if (mounted) {
+      setState(() {
+        _todayCash = opCash + q(cashIn) - q(cashOut) + q(adjCash);
+        _todayUpi  = opUpi  + q(upiIn)  - q(upiOut)  + q(adjUpi);
+      });
+    }
+  }
+
+  Future<void> _loadBackupStatus() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query('backup_log',
+        where: 'status = ?',
+        whereArgs: ['success'],
+        orderBy: 'created_at DESC',
+        limit: 1);
+    if (mounted) {
+      setState(() => _lastBackupAt =
+          rows.isNotEmpty ? rows.first['created_at'] as String? : null);
+    }
+  }
+
+  // ─── Rate edit bottom sheet ───────────────────────────────────────────────
+
+  void _showRateSheet(String title, double current, String settingsKey) {
+    final ctrl = TextEditingController(
+        text: current > 0 ? _fmtIndianStr(current.round()) : '');
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Today's Gold Rates",
-            style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: FlowColors.primary)),
-        content: Column(
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      transitionAnimationController: AnimationController(
+        vsync: Navigator.of(context),
+        duration: const Duration(milliseconds: 300),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            24, 20, 24, MediaQuery.of(ctx).viewInsets.bottom + 32),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _rateField(rate22kCtrl, '22K Rate (₹/gram)'),
-            const SizedBox(height: 12),
-            _rateField(rate24kCtrl, '24K Rate (₹/gram)'),
-            const SizedBox(height: 12),
-            _rateField(pledgeRateCtrl, 'Pledge Rate (₹/gram)'),
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 22),
+            Text(title,
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: _navy)),
+            const SizedBox(height: 18),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[\d,]')),
+                _IndianNumberFormatter(),
+              ],
+              style: const TextStyle(
+                  fontSize: 20, color: _navy, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                prefixText: '₹ ',
+                prefixStyle: const TextStyle(
+                    fontSize: 20,
+                    color: _navy,
+                    fontWeight: FontWeight.w600),
+                labelText: 'Amount',
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: _gold, width: 2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 26),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _tSec,
+                      minimumSize: const Size.fromHeight(52),
+                      side: const BorderSide(color: Color(0xFFCCCCCC)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('CANCEL',
+                        style: TextStyle(
+                            fontSize: 16, letterSpacing: 0.5)),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final raw = ctrl.text.replaceAll(',', '');
+                      final val = double.tryParse(raw);
+                      if (val == null || val <= 0) return;
+                      Navigator.of(ctx).pop();
+                      await _settings.upsertMany({
+                        settingsKey: (
+                          value: val.toStringAsFixed(2),
+                          type: 'double'
+                        ),
+                      });
+                      if (mounted) {
+                        setState(() {
+                          if (settingsKey == 'gold_rate') {
+                            _goldRate = val;
+                          } else {
+                            _pledgeRate = val;
+                          }
+                        });
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _gold,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(52),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('UPDATE',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5)),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel',
-                style: TextStyle(fontSize: 17, color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: FlowColors.primary),
-            onPressed: () async {
-              Navigator.of(ctx).pop();
-              final r22 = double.tryParse(rate22kCtrl.text.trim());
-              final r24 = double.tryParse(rate24kCtrl.text.trim());
-              final rp = double.tryParse(pledgeRateCtrl.text.trim());
-              if (r22 == null || r24 == null || rp == null) return;
-              final db = await AppDatabase.instance.database;
-              final today =
-                  DateTime.now().toIso8601String().substring(0, 10);
-              await db.insert('gold_rates', {
-                'rate_date': today,
-                'rate_22k': r22,
-                'rate_24k': r24,
-                'pledge_rate': rp,
-                'source': 'manual',
-                'is_manual': 1,
-                'created_by': null,
-                'created_at': DateTime.now().toIso8601String(),
-              });
-              await _settingsRepository.upsertMany({
-                'default_pledge_rate':
-                    (value: rp.toStringAsFixed(2), type: 'double'),
-              });
-              _loadGoldRates();
-            },
-            child: const Text('Save',
-                style: TextStyle(fontSize: 17, color: Colors.white)),
-          ),
-        ],
       ),
     );
   }
 
-  Widget _rateField(TextEditingController ctrl, String label) => TextField(
-        controller: ctrl,
-        keyboardType:
-            const TextInputType.numberWithOptions(decimal: true),
-        inputFormatters: [
-          FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
-        ],
-        style: const TextStyle(fontSize: 20),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(fontSize: 17),
-          prefixText: '₹ ',
-        ),
-      );
-
-  void _showComingSoon(String module) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$module coming soon.'),
-        backgroundColor: FlowColors.primary,
-      ),
-    );
-  }
+  // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: FlowColors.bg,
+      key: _scaffoldKey,
+      backgroundColor: _bg,
       drawer: _buildDrawer(),
       appBar: AppBar(
-        backgroundColor: FlowColors.primary,
-        iconTheme: const IconThemeData(color: Colors.white, size: 30),
-        title: const Text('CM Bank',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5)),
+        toolbarHeight: 76,
+        automaticallyImplyLeading: false,
+        backgroundColor: _navy,
+        elevation: 0,
+        leadingWidth: 56,
+        leading: IconButton(
+          icon: const Icon(Icons.menu, color: _gold, size: 28),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+          tooltip: 'Menu',
+        ),
+        centerTitle: true,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(
+              'assets/images/cmb_logo.png',
+              height: 52,
+              width: 52,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) =>
+                  const Icon(Icons.shield, color: _gold, size: 52),
+            ),
+            const SizedBox(width: 10),
+            const Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  'CM Bank',
+                  style: TextStyle(
+                    color: _gold,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 2.0,
+                    height: 1.1,
+                  ),
+                ),
+                
+              ],
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings_outlined,
-                color: Colors.white, size: 28),
+            icon: const Icon(Icons.lock_outline, color: _gold, size: 26),
+            onPressed: widget.onLock,
+            tooltip: 'Lock app',
+          ),
+          IconButton(
+            icon:
+                const Icon(Icons.settings_outlined, color: _gold, size: 26),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const SettingsScreen()),
             ),
+            tooltip: 'Settings',
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 80),
-          children: [
-            _goldRateCard(),
-            _pledgeRateCard(),
-            const SizedBox(height: 6),
-            _bigButton(
-              icon: Icons.add_box_outlined,
-              label: 'NEW PLEDGE',
-              subtitle: 'Create a new gold loan',
-              color: FlowColors.primary,
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const NewPledgeScreen()),
-                );
-                _loadSummary();
-              },
-            ),
-            const SizedBox(height: 12),
-            _bigButton(
-              icon: Icons.search,
-              label: 'OPEN PLEDGE',
-              subtitle: 'Search & manage active pledges',
-              color: FlowColors.primaryLight,
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const OpenPledgeScreen()),
-                );
-                _loadSummary();
-              },
-            ),
-            const SizedBox(height: 12),
-            _bigButton(
-              icon: Icons.calculate_outlined,
-              label: 'INTEREST CALCULATOR',
-              subtitle: 'Calculate & close pledge',
-              color: const Color(0xFF283593),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const CalculatorScreen()),
+      body: Column(
+        children: [
+          // Gold gradient divider below app bar
+          Container(
+            height: 1.5,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.transparent, _gold, Colors.transparent],
               ),
             ),
-            const SizedBox(height: 18),
-            _summaryChips(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ─── Gold Rate Card ─────────────────────────────────────────────────────────
-
-  Widget _sourceChip(String source) {
-    final isApi = source == 'api';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: isApi ? FlowColors.greenLight : FlowColors.goldLight,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        isApi ? 'LIVE' : 'MANUAL',
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-          color: isApi ? FlowColors.green : FlowColors.gold,
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
-
-  Widget _goldRateCard() {
-    if (_loadingRates) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: FlowColors.goldLight,
-          border: Border.all(color: FlowColors.gold, width: 1.5),
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(color: Color(0x0D000000), blurRadius: 8, offset: Offset(0, 2))
-          ],
-        ),
-        child: const Center(
-          child: SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: FlowColors.orange),
           ),
-        ),
-      );
-    }
-
-    final has = _goldRates != null;
-    final r22 = has ? (_goldRates!['rate_22k'] as double) : 0.0;
-    final r24 = has ? (_goldRates!['rate_24k'] as double) : 0.0;
-
-    return GestureDetector(
-      onTap: _showGoldRateDialog,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: has ? FlowColors.goldLight : FlowColors.orangeLight,
-          border: Border.all(
-              color: has ? FlowColors.gold : FlowColors.orange, width: 1.5),
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(
-                color: Color(0x0D000000), blurRadius: 8, offset: Offset(0, 2))
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  has ? Icons.trending_up : Icons.warning_amber_outlined,
-                  color: FlowColors.orange,
-                  size: 16,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    has ? 'GOLD RATES TODAY' : 'GOLD RATES NOT SET TODAY',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: FlowColors.orange,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-                if (has)
-                  _sourceChip(_goldRates!['source'] as String? ?? 'manual'),
-                const SizedBox(width: 4),
-                _fetchingLive
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: FlowColors.orange),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.refresh,
-                            color: FlowColors.orange, size: 22),
-                        tooltip: 'Fetch live rate',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onPressed: _fetchLiveRates,
-                      ),
-              ],
+          // Warning banners
+          if (_showLowStorageWarning)
+            _warningBanner(
+              message:
+                  '⚠ Low storage: Free up space on your device.',
+              color: CMBColors.warningRed,
+              onDismiss: () =>
+                  setState(() => _showLowStorageWarning = false),
             ),
-            if (has) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('24 Karat',
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: FlowColors.medText)),
-                        Text(
-                          '₹${r24.toStringAsFixed(0)}/g',
-                          style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              color: FlowColors.darkText),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 1, height: 36, color: const Color(0xFFF0C030)),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('22 Karat',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  color: FlowColors.medText)),
-                          Text(
-                            '₹${r22.toStringAsFixed(0)}/g',
-                            style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                color: FlowColors.darkText),
-                          ),
-                        ],
+          if (_showDriveLowWarning)
+            _warningBanner(
+              message: '⚠ Google Drive storage low',
+              color: CMBColors.warningOrange,
+              onDismiss: () =>
+                  setState(() => _showDriveLowWarning = false),
+            ),
+          // Main scrollable content
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _loadAll,
+              color: _gold,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                child: Column(
+                  children: [
+                    _ratesCard(),
+                    const SizedBox(height: 13),
+                    _actionCard(
+                      iconData: Icons.add_circle_outline,
+                      iconColor: _gold,
+                      iconBg: const Color(0xFFFDF5E0),
+                      borderAccent: _gold,
+                      title: 'New pledge',
+                      subtitle: 'Create a new gold loan',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const NewPledgeScreen()),
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 13),
+                    _actionCard(
+                      iconData: Icons.search,
+                      iconColor: const Color(0xFF2E7D32),
+                      iconBg: const Color(0xFFEDF7ED),
+                      borderAccent: const Color(0xFF2E7D32),
+                      title: 'Open pledge',
+                      subtitle: 'Search and manage active pledges',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const OpenPledgeScreen()),
+                      ),
+                    ),
+                    const SizedBox(height: 13),
+                    _actionCard(
+                      iconData: Icons.calculate_outlined,
+                      iconColor: _navy,
+                      iconBg: const Color(0xFFEEF0F8),
+                      borderAccent: _navy,
+                      title: 'Interest calculator',
+                      subtitle: 'Calculate and save interest',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const CalculatorScreen()),
+                      ),
+                    ),
+                    const SizedBox(height: 13),
+                    _accountsCard(),
+                    const SizedBox(height: 13),
+                    _backupBar(),
+                  ],
+                ),
               ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ─── Pledge Rate Card ───────────────────────────────────────────────────────
-
-  Widget _pledgeRateCard() {
-    final has = _goldRates != null;
-    final rp = has ? (_goldRates!['pledge_rate'] as double) : 0.0;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: FlowColors.primaryLight, width: 1.5),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x0D000000), blurRadius: 8, offset: Offset(0, 2))
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  // ─── Warning banner ───────────────────────────────────────────────────────
+
+  Widget _warningBanner({
+    required String message,
+    required Color color,
+    required VoidCallback onDismiss,
+  }) {
+    return Container(
+      color: color,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          const Icon(Icons.monetization_on_outlined,
-              color: FlowColors.primary, size: 24),
-          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "TODAY'S PLEDGE RATE",
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black45,
-                      letterSpacing: 1.0),
-                ),
-                Text(
-                  has ? '₹${rp.toStringAsFixed(0)}/g' : 'Not set today',
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      color: has ? FlowColors.primary : Colors.black38),
-                ),
-              ],
-            ),
+            child: Text(message,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500)),
           ),
-          TextButton.icon(
-            onPressed: _showGoldRateDialog,
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Edit', style: TextStyle(fontSize: 15)),
-            style: TextButton.styleFrom(
-              foregroundColor: FlowColors.primary,
-              backgroundColor: FlowColors.accent,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          GestureDetector(
+            onTap: onDismiss,
+            child: const Padding(
+              padding: EdgeInsets.only(left: 8),
+              child: Icon(Icons.close, color: Colors.white, size: 20),
             ),
           ),
         ],
@@ -542,130 +501,398 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ─── Big Action Button ──────────────────────────────────────────────────────
+  // ─── Rates card ──────────────────────────────────────────────────────────
 
-  Widget _bigButton({
-    required IconData icon,
-    required String label,
-    required String subtitle,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return SizedBox(
-      width: double.infinity,
-      height: 76,
-      child: ElevatedButton(
-        onPressed: onTap,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: color,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14)),
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          alignment: Alignment.centerLeft,
-          elevation: 2,
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 28),
-            const SizedBox(width: 14),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.3)),
-                Text(subtitle,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.white70)),
-              ],
-            ),
-          ],
-        ),
+  Widget _ratesCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _gdBorder, width: 1.2),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("TODAY'S RATES",
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: _gold,
+                  letterSpacing: 1.2)),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: _rateCol(
+                  iconData: Icons.monetization_on,
+                  label: 'Gold rate',
+                  value: _goldRate,
+                  onEdit: () => _showRateSheet(
+                      'Edit Gold Rate', _goldRate, 'gold_rate'),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Container(
+                  width: 1,
+                  height: 52,
+                  color: const Color(0x40D4A843),
+                ),
+              ),
+              Expanded(
+                child: _rateCol(
+                  iconData: Icons.account_balance,
+                  label: 'Pledge rate',
+                  value: _pledgeRate,
+                  onEdit: () => _showRateSheet('Edit Pledge Rate',
+                      _pledgeRate, 'default_pledge_rate'),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  // ─── Summary Chips ──────────────────────────────────────────────────────────
-
-  Widget _summaryChips() {
+  Widget _rateCol({
+    required IconData iconData,
+    required String label,
+    required double value,
+    required VoidCallback onEdit,
+  }) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Expanded(
-          child: _summaryChip(
-            icon: Icons.folder_open_outlined,
-            label: '$_openPledgeCount Open Pledges',
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: _navy,
+            borderRadius: BorderRadius.circular(10),
           ),
+          child: Icon(iconData, color: _gold, size: 20),
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: _summaryChip(
-            icon: Icons.payments_outlined,
-            label: '${money(_todayCollections)} Today',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: const TextStyle(fontSize: 12, color: _tSec)),
+              const SizedBox(height: 2),
+              Text(
+                value > 0 ? '${_fmtRupee(value)}/g' : 'Not set',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: value > 0 ? _tPrimary : Colors.black38,
+                  height: 1.1,
+                ),
+              ),
+            ],
+          ),
+        ),
+        GestureDetector(
+          onTap: onEdit,
+          child: const Padding(
+            padding: EdgeInsets.all(6),
+            child: Icon(Icons.edit, color: _gold, size: 18),
           ),
         ),
       ],
     );
   }
 
-  Widget _summaryChip({required IconData icon, required String label}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: FlowColors.primaryLight, width: 1.2),
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x08000000), blurRadius: 4, offset: Offset(0, 1))
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: FlowColors.primary),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              label,
-              style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: FlowColors.primary),
+  // ─── Action card ─────────────────────────────────────────────────────────
+
+  Widget _actionCard({
+    required IconData iconData,
+    required Color iconColor,
+    required Color iconBg,
+    required Color borderAccent,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 80),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _gdBorder, width: 1.2),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2)),
+          ],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        child: Row(
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: iconBg,
+                borderRadius: BorderRadius.circular(14),
+                border: Border(
+                    left: BorderSide(color: borderAccent, width: 4)),
+              ),
+              child: Icon(iconData, color: iconColor, size: 28),
             ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: _tPrimary)),
+                  const SizedBox(height: 3),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          fontSize: 13, color: _tSec)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: _gold, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Today's Accounts card ───────────────────────────────────────────────
+
+  Widget _accountsCard() {
+    final now = DateTime.now();
+    final dateStr = '${now.day.toString().padLeft(2, '0')}/'
+        '${now.month.toString().padLeft(2, '0')}/${now.year}';
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const DailyAccountsScreen()),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _navy,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: CMBColors.borderOnNavy, width: 0.5),
+        ),
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Text("TODAY'S ACCOUNTS",
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _gold,
+                        letterSpacing: 1.2)),
+                const Spacer(),
+                Text(dateStr,
+                    style: const TextStyle(
+                        fontSize: 11, color: CMBColors.textOnNavyMuted)),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _accountCol(
+                    icon: Icons.account_balance_wallet,
+                    label: 'Cash',
+                    value: _todayCash,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _accountCol(
+                    icon: Icons.phone_android,
+                    label: 'UPI',
+                    value: _todayUpi,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Center(
+              child: Text(
+                '→ Tap to open daily accounts',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: _gold.withValues(alpha: 0.6),
+                    fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _accountCol({
+    required IconData icon,
+    required String label,
+    required double value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _gdBg8,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: CMBColors.borderOnNavy, width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: _gold, size: 16),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 12, color: CMBColors.textOnNavySmall)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _fmtRupee(value),
+            style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w700,
+                color: CMBColors.textOnNavyLarge,
+                height: 1.0),
           ),
         ],
       ),
     );
   }
 
-  // ─── Drawer ─────────────────────────────────────────────────────────────────
+  // ─── Backup status bar ───────────────────────────────────────────────────
+
+  Widget _backupBar() {
+    final overdue = _lastBackupAt == null ||
+        DateTime.now()
+                .difference(
+                    DateTime.tryParse(_lastBackupAt!) ?? DateTime(2000))
+                .inHours >
+            24;
+    final dbDot   = overdue ? Colors.red : Colors.green;
+    final dbColor = overdue ? Colors.red : const Color(0xFF388E3C);
+    final dbLabel = _lastBackupAt != null
+        ? 'Last backup: ${_fmtBackupTime(_lastBackupAt!)}'
+        : 'Never backed up';
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const AdminScreen()),
+      ),
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _gdBorder, width: 1),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                        color: dbDot, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Text(dbLabel,
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: dbColor,
+                            fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              width: 1,
+              height: 18,
+              color: const Color(0xFFE0E0E0),
+              margin: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+            const Row(
+              children: [
+                Icon(Icons.cloud_done, color: Colors.green, size: 14),
+                SizedBox(width: 5),
+                Text('Photos synced',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.green,
+                        fontWeight: FontWeight.w500)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Drawer ──────────────────────────────────────────────────────────────
 
   Widget _buildDrawer() {
     return Drawer(
       child: Column(
         children: [
           Container(
-            color: FlowColors.primary,
+            color: _navy,
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(20, 52, 20, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text('CM Bank',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold)),
-                SizedBox(height: 4),
-                Text('Gold Loan Management',
-                    style:
-                        TextStyle(color: Colors.white70, fontSize: 14)),
+            child: Row(
+              children: [
+                Image.asset(
+                  'assets/images/cmb_logo.png',
+                  height: 52,
+                  width: 52,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) =>
+                      const Icon(Icons.shield, color: _gold, size: 52),
+                ),
+                const SizedBox(width: 14),
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('CM Bank',
+                        style: TextStyle(
+                            color: _gold,
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold)),
+                    Text('Gold Loan Management',
+                        style: TextStyle(
+                            color: CMBColors.textOnNavyMuted, fontSize: 13)),
+                  ],
+                ),
               ],
             ),
           ),
@@ -673,44 +900,53 @@ class _HomeScreenState extends State<HomeScreen> {
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
-                _drawerItem(Icons.file_open_outlined, 'Load Existing Pledge',
-                    () => _showComingSoon('Load Existing Pledge')),
-                _drawerItem(Icons.folder_outlined, 'Closed Pledges', () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const ClosedPledgesScreen()),
-                  );
-                }),
+                _drawerItem(Icons.upload_file, 'Load Existing Pledge',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) =>
+                                const LoadExistingPledgeScreen()))),
+                _drawerItem(Icons.archive, 'Closed Pledges',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) =>
+                                const ClosedPledgesScreen()))),
                 _drawerItem(
-                    Icons.account_balance_wallet_outlined, 'Daily Accounts',
-                    () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const DailyAccountsScreen()),
-                  );
-                }),
-                _drawerItem(
-                    Icons.admin_panel_settings_outlined, 'Admin Area',
-                    () {
-                      Navigator.pop(context);
-                      Navigator.push(context, MaterialPageRoute(
-                          builder: (_) => const AdminScreen()));
-                    }),
+                    Icons.account_balance_wallet,
+                    'Daily Accounts',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) =>
+                                const DailyAccountsScreen()))),
+                _drawerItem(Icons.balance, 'Gold Stock Register',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const GoldStockScreen()))),
+                _drawerItem(Icons.people, 'Customers',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) =>
+                                const CustomerListScreen()))),
+                _drawerItem(Icons.admin_panel_settings, 'Admin Area',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const AdminScreen()))),
                 const Divider(height: 24),
-                _drawerItem(Icons.settings_outlined, 'Settings', () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const SettingsScreen()),
-                  );
-                }),
+                _drawerItem(Icons.settings, 'Settings',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const SettingsScreen()))),
                 ListTile(
-                  leading:
-                      const Icon(Icons.lock_outline, color: Colors.red),
+                  leading: const Icon(Icons.lock, color: Colors.red),
                   title: const Text('Lock App',
-                      style: TextStyle(fontSize: 18, color: Colors.red)),
+                      style: TextStyle(
+                          fontSize: 18, color: Colors.red)),
                   onTap: () {
                     Navigator.pop(context);
                     widget.onLock?.call();
@@ -727,12 +963,66 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _drawerItem(
       IconData icon, String label, VoidCallback onTap) {
     return ListTile(
-      leading: Icon(icon, color: FlowColors.primary),
-      title: Text(label, style: const TextStyle(fontSize: 18)),
+      leading: Icon(icon, color: _gold),
+      title: Text(label,
+          style: const TextStyle(fontSize: 18, color: _tPrimary)),
       onTap: () {
         Navigator.pop(context);
         onTap();
       },
     );
+  }
+}
+
+// ─── Indian number text formatter ─────────────────────────────────────────────
+
+class _IndianNumberFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll(',', '');
+    if (digits.isEmpty) return newValue.copyWith(text: '');
+    final n = int.tryParse(digits);
+    if (n == null) return oldValue;
+    final formatted = _fmtIndianStr(n);
+    return newValue.copyWith(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+String _isoDate(DateTime dt) =>
+    '${dt.year.toString().padLeft(4, '0')}-'
+    '${dt.month.toString().padLeft(2, '0')}-'
+    '${dt.day.toString().padLeft(2, '0')}';
+
+String _fmtIndianStr(int n) {
+  if (n == 0) return '0';
+  final s = n.toString();
+  if (s.length <= 3) return s;
+  final last3 = s.substring(s.length - 3);
+  final rest  = s.substring(0, s.length - 3);
+  final buf   = StringBuffer();
+  for (int i = 0; i < rest.length; i++) {
+    if (i > 0 && (rest.length - i) % 2 == 0) buf.write(',');
+    buf.write(rest[i]);
+  }
+  return '$buf,$last3';
+}
+
+String _fmtRupee(double amount) => '₹${_fmtIndianStr(amount.round().abs())}';
+
+String _fmtBackupTime(String iso) {
+  try {
+    final dt = DateTime.parse(iso).toLocal();
+    final d  = '${dt.day.toString().padLeft(2, '0')}/'
+        '${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    return '$d ${dt.hour.toString().padLeft(2, '0')}:'
+        '${dt.minute.toString().padLeft(2, '0')}';
+  } catch (_) {
+    return iso;
   }
 }

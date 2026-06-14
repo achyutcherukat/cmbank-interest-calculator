@@ -15,6 +15,7 @@ class DatabaseTables {
   static const auditLog = 'audit_log';
   static const backupLog = 'backup_log';
   static const calcHistory = 'calc_history';
+  static const dailyStock = 'daily_stock';
 }
 
 class DatabaseSchema {
@@ -47,6 +48,7 @@ CREATE TABLE pledges (
   purity TEXT NOT NULL DEFAULT '22K',
   gold_rate REAL NOT NULL DEFAULT 0,
   pledge_rate REAL NOT NULL DEFAULT 0,
+  actual_item_value REAL NOT NULL DEFAULT 0,
   principal_amount REAL NOT NULL DEFAULT 0,
   interest_rate REAL NOT NULL DEFAULT 18,
   start_date TEXT NOT NULL,
@@ -60,6 +62,7 @@ CREATE TABLE pledges (
   total_interest_paid REAL NOT NULL DEFAULT 0,
   total_amount_collected REAL NOT NULL DEFAULT 0,
   notes TEXT,
+  form_photo_paths TEXT,
   created_by INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -229,8 +232,12 @@ CREATE TABLE customers (
   name TEXT NOT NULL,
   phone TEXT,
   address TEXT,
+  district TEXT,
+  state TEXT,
+  pin_code TEXT,
   id_proof_type TEXT,
   id_proof_number TEXT,
+  id_proof_photo_paths TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -248,6 +255,8 @@ CREATE TABLE pledge_items (
   net_weight REAL NOT NULL DEFAULT 0,
   purity TEXT NOT NULL DEFAULT '22K',
   photo_path TEXT,
+  photo_paths TEXT,
+  notes TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(pledge_id) REFERENCES pledges(id)
 );
@@ -280,6 +289,32 @@ CREATE TABLE calc_history (
     'CREATE INDEX idx_audit_log_entity ON audit_log(entity_type, entity_id);',
   ];
 
+  static const createDailyStock = '''
+CREATE TABLE daily_stock (
+  stock_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stock_date TEXT NOT NULL UNIQUE,
+  opening_weight REAL NOT NULL DEFAULT 0,
+  opening_count INTEGER NOT NULL DEFAULT 0,
+  gold_in_weight REAL NOT NULL DEFAULT 0,
+  gold_in_count INTEGER NOT NULL DEFAULT 0,
+  gold_out_weight REAL NOT NULL DEFAULT 0,
+  gold_out_count INTEGER NOT NULL DEFAULT 0,
+  adjustment_weight REAL NOT NULL DEFAULT 0,
+  adjustment_count INTEGER NOT NULL DEFAULT 0,
+  closing_weight REAL NOT NULL DEFAULT 0,
+  closing_count INTEGER NOT NULL DEFAULT 0,
+  is_locked INTEGER NOT NULL DEFAULT 0,
+  locked_at TEXT,
+  locked_by TEXT,
+  discrepancy_note TEXT,
+  unlocked_by TEXT,
+  unlock_reason TEXT,
+  unlocked_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+''';
+
   static const allCreateStatements = <String>[
     createCustomers,
     createUsers,
@@ -295,6 +330,7 @@ CREATE TABLE calc_history (
     createAuditLog,
     createBackupLog,
     createCalcHistory,
+    createDailyStock,
     ...createIndexes,
   ];
 }

@@ -1,9 +1,17 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../shared/widgets/flow_widgets.dart';
+import '../data/payment_model.dart';
+import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
 import '../data/pledge_repository.dart';
+import 'open_pledge_screen.dart';
+
+// ─── Closed Pledges List Screen ───────────────────────────────────────────────
 
 class ClosedPledgesScreen extends StatefulWidget {
   const ClosedPledgesScreen({super.key});
@@ -33,7 +41,12 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
   Future<void> _loadRecent() async {
     final pledges =
         await PledgeRepository.instance.getClosedPledges(limit: 20);
-    if (mounted) setState(() { _recentClosed = pledges; _loading = false; });
+    if (mounted) {
+      setState(() {
+        _recentClosed = pledges;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _search() async {
@@ -54,7 +67,8 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) => ClosedPledgeDetailScreen(pledge: pledge)),
+          builder: (_) =>
+              ClosedPledgeDetailScreen(pledgeId: pledge.id!)),
     );
   }
 
@@ -97,7 +111,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
       backgroundColor: FlowColors.bg,
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
-        foregroundColor: Colors.white,
+        foregroundColor: FlowColors.goldRich,
         title: const Text('Closed Pledges'),
       ),
       body: _loading
@@ -124,7 +138,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: _search,
-                      icon: const Icon(Icons.search),
+                      icon: const Icon(Icons.manage_search),
                       label: const Text('SEARCH'),
                     ),
                   ),
@@ -164,7 +178,8 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: Colors.white,
-          border: Border.all(color: const Color(0xFFE0E0E0), width: 1.5),
+          border:
+              Border.all(color: FlowColors.primaryLight, width: 1.5),
           borderRadius: BorderRadius.circular(12),
           boxShadow: const [
             BoxShadow(
@@ -206,7 +221,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    'Closed: ${p.closureDate ?? '—'}  ·  ${money(p.loanAmount)}',
+                    'Closed: ${isoToDisplay(p.closureDate)}  ·  ${money(p.loanAmount)}',
                     style: const TextStyle(
                         fontSize: 13, color: FlowColors.medText),
                   ),
@@ -229,15 +244,112 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
   }
 }
 
+// ─── Chain Entry ──────────────────────────────────────────────────────────────
+
+class _ClChainEntry {
+  const _ClChainEntry(this.pledgeNumber, this.pledgeId, this.isCurrent, this.status);
+  final String pledgeNumber;
+  final int pledgeId;
+  final bool isCurrent;
+  final String status;
+}
+
 // ─── Closed Pledge Detail Screen ──────────────────────────────────────────────
 
-class ClosedPledgeDetailScreen extends StatelessWidget {
-  const ClosedPledgeDetailScreen({super.key, required this.pledge});
+class ClosedPledgeDetailScreen extends StatefulWidget {
+  const ClosedPledgeDetailScreen({super.key, required this.pledgeId});
+  final int pledgeId;
 
-  final PledgeModel pledge;
+  @override
+  State<ClosedPledgeDetailScreen> createState() =>
+      _ClosedPledgeDetailScreenState();
+}
 
-  String _statusLabel() {
-    switch (pledge.status) {
+class _ClosedPledgeDetailScreenState
+    extends State<ClosedPledgeDetailScreen> {
+  PledgeModel? _pledge;
+  List<PledgeItemModel> _items = [];
+  List<PaymentModel> _payments = [];
+  Map<String, dynamic>? _customer;
+  List<_ClChainEntry> _chain = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final pledge =
+        await PledgeRepository.instance.getPledgeById(widget.pledgeId);
+    if (pledge == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+
+    final items = await PledgeRepository.instance
+        .getItemsForPledge(widget.pledgeId);
+    final payments = await PledgeRepository.instance
+        .getPaymentsForPledge(widget.pledgeId);
+
+    Map<String, dynamic>? customer;
+    if (pledge.customerId != null) {
+      customer = await PledgeRepository.instance
+          .getCustomerById(pledge.customerId!);
+    }
+
+    final chain = await _buildChain(pledge);
+
+    if (mounted) {
+      setState(() {
+        _pledge = pledge;
+        _items = items;
+        _payments = payments;
+        _customer = customer;
+        _chain = chain;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<List<_ClChainEntry>> _buildChain(PledgeModel p) async {
+    final chain = <_ClChainEntry>[];
+
+    PledgeModel? cur = p;
+    while (cur != null) {
+      chain.insert(
+          0, _ClChainEntry(cur.pledgeNumber, cur.id!, cur.id == p.id, cur.status));
+      if (cur.renewalParentId == null) break;
+      cur = await PledgeRepository.instance
+          .getPledgeById(cur.renewalParentId!);
+    }
+
+    int limit = 10;
+    PledgeModel? succ =
+        await PledgeRepository.instance.getSuccessorPledge(p.id!);
+    while (succ != null && limit-- > 0) {
+      chain.add(_ClChainEntry(succ.pledgeNumber, succ.id!, false, succ.status));
+      succ = await PledgeRepository.instance
+          .getSuccessorPledge(succ.id!);
+    }
+
+    return chain;
+  }
+
+  List<String> _parsePhotoPaths(dynamic value) {
+    if (value == null) return [];
+    final s = value as String?;
+    if (s == null || s.isEmpty) return [];
+    try {
+      return (jsonDecode(s) as List).cast<String>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
       case 'renewed':
         return 'RENEWED';
       case 'migrated':
@@ -247,8 +359,8 @@ class ClosedPledgeDetailScreen extends StatelessWidget {
     }
   }
 
-  Color _statusColor() {
-    switch (pledge.status) {
+  Color _statusColor(String status) {
+    switch (status) {
       case 'renewed':
         return FlowColors.orange;
       case 'migrated':
@@ -258,8 +370,8 @@ class ClosedPledgeDetailScreen extends StatelessWidget {
     }
   }
 
-  Color _statusBg() {
-    switch (pledge.status) {
+  Color _statusBg(String status) {
+    switch (status) {
       case 'renewed':
         return FlowColors.orangeLight;
       case 'migrated':
@@ -269,38 +381,73 @@ class ClosedPledgeDetailScreen extends StatelessWidget {
     }
   }
 
+  String _paymentTypeLabel(String type) {
+    switch (type) {
+      case 'closure':
+        return 'Closure';
+      case 'renewal':
+        return 'Renewal';
+      case 'interest':
+        return 'Interest';
+      case 'principal':
+        return 'Principal';
+      default:
+        return type;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final daysHeld = pledge.closureDate != null && pledge.pledgeDate.isNotEmpty
-        ? DateTime.tryParse(pledge.closureDate!)
-                ?.difference(
-                    DateTime.tryParse(pledge.pledgeDate) ?? DateTime.now())
-                .inDays ??
-            0
+    if (_loading) {
+      return const Scaffold(
+          backgroundColor: FlowColors.bg,
+          body: Center(child: CircularProgressIndicator()));
+    }
+
+    final p = _pledge;
+    if (p == null) {
+      return Scaffold(
+        backgroundColor: FlowColors.bg,
+        appBar: AppBar(
+            backgroundColor: FlowColors.primary,
+            foregroundColor: FlowColors.goldRich,
+            title: const Text('Pledge')),
+        body: const Center(child: Text('Pledge not found.')),
+      );
+    }
+
+    final daysHeld = p.closureDate != null && p.pledgeDate.isNotEmpty
+        ? (DateTime.tryParse(p.closureDate!)
+                    ?.difference(
+                        DateTime.tryParse(p.pledgeDate) ?? DateTime.now())
+                    .inDays ??
+                0)
+            .abs()
         : 0;
 
     return Scaffold(
       backgroundColor: FlowColors.bg,
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
-        foregroundColor: Colors.white,
-        title: Text('Pledge ${pledge.pledgeNumber}'),
+        foregroundColor: FlowColors.goldRich,
+        title: Text('Pledge ${p.pledgeNumber}'),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ── Status row ─────────────────────────────────────────────────────
           Row(
             children: [
               StatusBadge(
-                text: _statusLabel(),
-                color: _statusColor(),
-                backgroundColor: _statusBg(),
+                text: _statusLabel(p.status),
+                color: _statusColor(p.status),
+                backgroundColor: _statusBg(p.status),
               ),
-              const SizedBox(width: 10),
-              if (pledge.source == 'manual')
+              if (p.source == 'manual') ...[
+                const SizedBox(width: 10),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: FlowColors.goldLight,
                     borderRadius: BorderRadius.circular(6),
@@ -311,85 +458,392 @@ class ClosedPledgeDetailScreen extends StatelessWidget {
                           color: FlowColors.gold,
                           fontWeight: FontWeight.bold)),
                 ),
+              ],
             ],
           ),
           const SizedBox(height: 14),
 
-          // Pledge details
+          // ── Pledge Details ─────────────────────────────────────────────────
           FlowCard(
+            header: 'Pledge Details',
             child: Column(
               children: [
-                const FlowCardTitle('Pledge Details'),
-                DetailRow(label: 'Pledge No.', value: pledge.pledgeNumber),
-                if (pledge.customerName.isNotEmpty)
-                  DetailRow(label: 'Customer', value: pledge.customerName),
-                DetailRow(label: 'Pledge Date', value: pledge.pledgeDate),
+                DetailRow(
+                    label: 'Pledge No.', value: p.pledgeNumber),
+                DetailRow(
+                    label: 'Pledge Date',
+                    value: isoToDisplay(p.pledgeDate)),
                 DetailRow(
                     label: 'Closure Date',
-                    value: pledge.closureDate ?? '—'),
+                    value: isoToDisplay(p.closureDate)),
                 DetailRow(
-                    label: 'Days Held', value: '$daysHeld days', isLast: true),
-              ],
-            ),
-          ),
-
-          // Financial summary
-          FlowCard(
-            backgroundColor: FlowColors.accent,
-            child: Column(
-              children: [
-                const FlowCardTitle('Financial Summary'),
-                DetailRow(
-                    label: 'Principal', value: money(pledge.loanAmount)),
-                DetailRow(
-                    label: 'Interest Paid',
-                    value: money(pledge.totalInterestPaid)),
-                DetailRow(
-                    label: 'Total Collected',
-                    value: money(pledge.totalAmountCollected),
+                    label: 'Days Held',
+                    value: '$daysHeld days',
                     isLast: true),
               ],
             ),
           ),
 
-          // Gold details (if available)
-          if (pledge.netWeight > 0)
+          // ── Financial Summary ──────────────────────────────────────────────
+          FlowCard(
+            backgroundColor: FlowColors.accent,
+            header: 'Financial Summary',
+            child: Column(
+              children: [
+                DetailRow(
+                    label: 'Loan Amount', value: money(p.loanAmount)),
+                DetailRow(
+                    label: 'Interest Rate',
+                    value: '${p.interestRate.toStringAsFixed(0)}% p.a.'),
+                DetailRow(
+                    label: 'Interest Paid',
+                    value: money(p.totalInterestPaid)),
+                DetailRow(
+                    label: 'Total Collected',
+                    value: money(p.totalAmountCollected),
+                    isLast: true),
+              ],
+            ),
+          ),
+
+          // ── Gold Details ───────────────────────────────────────────────────
+          if (p.grossWeight > 0 ||
+              p.netWeight > 0 ||
+              p.pledgeRate > 0 ||
+              p.purity.isNotEmpty)
             FlowCard(
+              header: 'Gold Details',
               child: Column(
                 children: [
-                  DetailRow(
-                      label: 'Weight',
-                      value: '${pledge.netWeight.toStringAsFixed(2)} g'),
-                  DetailRow(
-                      label: 'Purity',
-                      value: pledge.purity.isNotEmpty ? pledge.purity : '—'),
-                  DetailRow(
-                      label: 'Interest Rate',
-                      value:
-                          '${pledge.interestRate.toStringAsFixed(0)}% p.a.',
-                      isLast: true),
+                  if (p.grossWeight > 0)
+                    DetailRow(
+                        label: 'Gross Weight',
+                        value:
+                            '${p.grossWeight.toStringAsFixed(2)} g'),
+                  if (p.netWeight > 0)
+                    DetailRow(
+                        label: 'Net Weight',
+                        value: '${p.netWeight.toStringAsFixed(2)} g'),
+                  if (p.purity.isNotEmpty)
+                    DetailRow(label: 'Purity', value: p.purity),
+                  if (p.pledgeRate > 0)
+                    DetailRow(
+                        label: 'Pledge Rate',
+                        value: '${money(p.pledgeRate)}/g'),
+                  if (p.actualItemValue > 0)
+                    DetailRow(
+                        label: 'Item Value',
+                        value: money(p.actualItemValue),
+                        isLast: true)
+                  else
+                    DetailRow(
+                        label: 'Gold Rate',
+                        value: p.goldRate > 0
+                            ? '${money(p.goldRate)}/g'
+                            : '—',
+                        isLast: true),
                 ],
               ),
-            )
-          else
-            FlowCard(
-              child: DetailRow(
-                  label: 'Interest Rate',
-                  value: '${pledge.interestRate.toStringAsFixed(0)}% p.a.',
-                  isLast: true),
             ),
 
-          // Renewal chain
-          if (pledge.renewalParentId != null)
+          // ── Customer Details ───────────────────────────────────────────────
+          if (p.customerName.isNotEmpty || _customer != null)
             FlowCard(
-              backgroundColor: FlowColors.accent,
-              child: Text(
-                'Renewed from pledge #${pledge.renewalParentId}',
-                style: const TextStyle(
-                    color: FlowColors.primary, fontWeight: FontWeight.bold),
+              header: 'Customer Details',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (p.customerName.isNotEmpty)
+                    DetailRow(label: 'Name', value: p.customerName),
+                  if (p.customerPhone != null &&
+                      p.customerPhone!.isNotEmpty)
+                    DetailRow(
+                        label: 'Phone', value: p.customerPhone!),
+                  () {
+                    final addr = _customer != null
+                        ? formatCustomerAddress(
+                            address: _customer!['address'] as String?,
+                            district: _customer!['district'] as String?,
+                            state: _customer!['state'] as String?,
+                            pinCode: _customer!['pin_code'] as String?,
+                          )
+                        : (p.customerAddress ?? '');
+                    if (addr.isEmpty) return const SizedBox.shrink();
+                    return DetailRow(label: 'Address', value: addr);
+                  }(),
+                  if (_customer != null) ...[
+                    if ((_customer!['id_proof_type'] as String?)
+                            ?.isNotEmpty ==
+                        true)
+                      DetailRow(
+                          label: 'ID Proof Type',
+                          value: _customer!['id_proof_type'] as String),
+                    if ((_customer!['id_proof_number'] as String?)
+                            ?.isNotEmpty ==
+                        true)
+                      DetailRow(
+                          label: 'ID Proof No.',
+                          value:
+                              _customer!['id_proof_number'] as String,
+                          isLast: true),
+                  ],
+                  // ID proof photos
+                  if (_customer != null) ...[
+                    Builder(builder: (_) {
+                      final paths = _parsePhotoPaths(
+                          _customer!['id_proof_photo_paths']);
+                      final existing = paths
+                          .where((p) => File(p).existsSync())
+                          .toList();
+                      if (existing.isEmpty) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('ID Proof Photos',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.black54,
+                                    fontWeight: FontWeight.w500)),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: existing
+                                  .map((path) => _photoThumb(path))
+                                  .toList(),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ],
               ),
             ),
+
+          // ── Item Details ───────────────────────────────────────────────────
+          if (_items.isNotEmpty)
+            for (int i = 0; i < _items.length; i++)
+              FlowCard(
+                header: _items.length == 1
+                    ? 'Item Details'
+                    : 'Item ${i + 1} of ${_items.length}',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_items[i].itemType.isNotEmpty &&
+                        _items[i].itemType != 'other')
+                      DetailRow(
+                          label: 'Type',
+                          value: _items[i].itemType),
+                    if (_items[i].grossWeight > 0)
+                      DetailRow(
+                          label: 'Gross Weight',
+                          value:
+                              '${_items[i].grossWeight.toStringAsFixed(2)} g'),
+                    DetailRow(
+                        label: 'Net Weight',
+                        value:
+                            '${_items[i].netWeight.toStringAsFixed(2)} g'),
+                    DetailRow(
+                        label: 'Purity',
+                        value: _items[i].purity.isEmpty
+                            ? 'Not specified'
+                            : _items[i].purity),
+                    if (_items[i].notes != null &&
+                        _items[i].notes!.isNotEmpty)
+                      DetailRow(
+                          label: 'Notes',
+                          value: _items[i].notes!,
+                          isLast: _items[i].photoPaths.isEmpty),
+                    if (_items[i].photoPaths.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      const Text('Photos',
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.black54,
+                              fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _items[i]
+                            .photoPaths
+                            .where((p) => File(p).existsSync())
+                            .map((p) => _photoThumb(p))
+                            .toList(),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+          // ── Payment Breakdown ─────────────────────────────────────────────
+          if (_payments.isNotEmpty)
+            FlowCard(
+              backgroundColor: FlowColors.greenLight,
+              borderColor: FlowColors.green,
+              child: Column(
+                children: [
+                  const FlowCardTitle('Payment Breakdown'),
+                  for (int i = 0; i < _payments.length; i++) ...[
+                    if (i > 0) const Divider(height: 20),
+                    if (_payments.length > 1)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${_paymentTypeLabel(_payments[i].paymentType)} · ${isoToDisplay(_payments[i].paymentDate.length >= 10 ? _payments[i].paymentDate.substring(0, 10) : _payments[i].paymentDate)}',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.black54,
+                              fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    if (_payments.length > 1) const SizedBox(height: 6),
+                    DetailRow(
+                        label: 'Total',
+                        value: money(_payments[i].amount)),
+                    if (_payments[i].cashAmount > 0)
+                      DetailRow(
+                          label: 'Cash',
+                          value: money(_payments[i].cashAmount)),
+                    if (_payments[i].upiAmount > 0)
+                      DetailRow(
+                          label: 'UPI',
+                          value: money(_payments[i].upiAmount)),
+                    DetailRow(
+                        label: 'Mode',
+                        value: _payments[i].paymentMode.toUpperCase(),
+                        isLast: i == _payments.length - 1),
+                  ],
+                ],
+              ),
+            ),
+
+          // ── Renewal Chain ─────────────────────────────────────────────────
+          if (_chain.length > 1)
+            FlowCard(
+              backgroundColor: FlowColors.accent,
+              header: 'Renewal Chain',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (int i = 0; i < _chain.length; i++) ...[
+                          if (i > 0)
+                            const Padding(
+                              padding:
+                                  EdgeInsets.symmetric(horizontal: 4),
+                              child: Icon(Icons.arrow_forward,
+                                  size: 14, color: Colors.black38),
+                            ),
+                          GestureDetector(
+                            onTap: _chain[i].isCurrent
+                                ? null
+                                : () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => _chain[i].status == 'open'
+                                            ? PledgeDetailScreen(pledgeId: _chain[i].pledgeId)
+                                            : ClosedPledgeDetailScreen(pledgeId: _chain[i].pledgeId),
+                                      ),
+                                    ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: _chain[i].isCurrent
+                                    ? FlowColors.primary
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: _chain[i].isCurrent
+                                      ? FlowColors.primary
+                                      : FlowColors.primaryLight,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Text(
+                                '#${_chain[i].pledgeNumber}',
+                                style: TextStyle(
+                                  color: _chain[i].isCurrent
+                                      ? Colors.white
+                                      : FlowColors.primary,
+                                  fontWeight: _chain[i].isCurrent
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          const SizedBox(height: 20),
         ],
+      ),
+    );
+  }
+
+  Widget _photoThumb(String path) {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => _ClosedPhotoViewScreen(file: File(path))),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: Image.file(
+          File(path),
+          height: 80,
+          width: 100,
+          fit: BoxFit.cover,
+          errorBuilder: (_, e, s) => Container(
+            height: 80,
+            width: 100,
+            color: Colors.black12,
+            child: const Icon(Icons.broken_image,
+                color: Colors.black26),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Photo Fullscreen Viewer ──────────────────────────────────────────────────
+
+class _ClosedPhotoViewScreen extends StatelessWidget {
+  const _ClosedPhotoViewScreen({required this.file});
+  final File file;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text('Photo'),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 5.0,
+          child: Image.file(file),
+        ),
       ),
     );
   }

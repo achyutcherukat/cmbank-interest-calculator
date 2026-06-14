@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../app/theme.dart';
 
 class FlowColors {
   const FlowColors._();
 
-  static const primary = Color(0xFF1A237E);
-  static const primaryLight = Color(0xFF3949AB);
-  static const accent = Color(0xFFE8EAF6);
-  static const bg = Color(0xFFF5F5F5);
+  static const primary = CMBColors.navy;
+  static const primaryLight = CMBColors.borderOnLight;
+  static const accent = CMBColors.warmWhite;
+  static const bg = CMBColors.pageBackground;
+  static const goldRich = CMBColors.goldRich;
+  static const textOnNavyLarge = CMBColors.textOnNavyLarge;
+  static const textOnNavySmall = CMBColors.textOnNavySmall;
+  static const textOnNavyMuted = CMBColors.textOnNavyMuted;
+  static const borderOnNavy = CMBColors.borderOnNavy;
+  static const statusRenewed = CMBColors.statusRenewed;
   static const gold = Color(0xFFF9A825);
   static const goldLight = Color(0xFFFFF8E1);
   static const green = Color(0xFF2E7D32);
@@ -23,12 +32,14 @@ class FlowCard extends StatelessWidget {
   const FlowCard({
     super.key,
     required this.child,
+    this.header,
     this.backgroundColor = Colors.white,
     this.borderColor = FlowColors.primaryLight,
     this.padding = const EdgeInsets.all(18),
   });
 
   final Widget child;
+  final String? header;
   final Color backgroundColor;
   final Color borderColor;
   final EdgeInsetsGeometry padding;
@@ -38,7 +49,7 @@ class FlowCard extends StatelessWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 14),
-      padding: padding,
+      padding: header != null ? EdgeInsets.zero : padding,
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(14),
@@ -51,7 +62,36 @@ class FlowCard extends StatelessWidget {
           ),
         ],
       ),
-      child: child,
+      child: header != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 10, horizontal: 16),
+                  decoration: const BoxDecoration(
+                    color: CMBColors.navy,
+                    borderRadius:
+                        BorderRadius.vertical(top: Radius.circular(12)),
+                    border: Border(
+                        bottom: BorderSide(
+                            color: CMBColors.borderOnNavy, width: 0.8)),
+                  ),
+                  child: Text(
+                    header!.toUpperCase(),
+                    style: const TextStyle(
+                      color: CMBColors.textOnNavyLarge,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+                Padding(padding: padding, child: child),
+              ],
+            )
+          : child,
     );
   }
 }
@@ -223,10 +263,7 @@ class StatusBadge extends StatelessWidget {
 
 String money(num value) {
   final isNegative = value < 0;
-  final abs = value.abs();
-  final parts = abs.toStringAsFixed(2).split('.');
-  final whole = parts[0];
-  final decimal = parts[1];
+  final whole = value.abs().round().toString();
 
   String intStr;
   if (whole.length <= 3) {
@@ -244,5 +281,61 @@ String money(num value) {
     intStr = '${buf.toString()},$last3';
   }
 
-  return '${isNegative ? '-' : ''}₹$intStr.$decimal';
+  return '${isNegative ? '-' : ''}₹$intStr';
+}
+
+// Converts ISO date string (YYYY-MM-DD) to display format (DD/MM/YYYY)
+String isoToDisplay(String? iso) {
+  if (iso == null || iso.isEmpty) return '—';
+  try {
+    final parts = iso.split('-');
+    if (parts.length == 3) return '${parts[2]}/${parts[1]}/${parts[0]}';
+  } catch (_) {}
+  return iso;
+}
+
+// ─── Customer address formatter ───────────────────────────────────────────────
+// Returns "Address, District, State, PIN" skipping any empty parts.
+
+String formatCustomerAddress({
+  String? address,
+  String? district,
+  String? state,
+  String? pinCode,
+}) {
+  final parts = [address, district, state, pinCode]
+      .where((p) => p != null && p.isNotEmpty)
+      .cast<String>()
+      .toList();
+  return parts.join(', ');
+}
+
+// ─── Indian number formatting ─────────────────────────────────────────────────
+
+String formatIndian(String digits) {
+  final clean = digits.replaceAll(RegExp(r'[^\d]'), '');
+  if (clean.isEmpty) return '';
+  if (clean.length <= 3) return clean;
+  final last3 = clean.substring(clean.length - 3);
+  final rest = clean.substring(0, clean.length - 3);
+  final buf = StringBuffer();
+  for (int i = 0; i < rest.length; i++) {
+    if (i > 0 && (rest.length - i) % 2 == 0) buf.write(',');
+    buf.write(rest[i]);
+  }
+  return '${buf.toString()},$last3';
+}
+
+class IndianNumberFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final formatted = formatIndian(newValue.text);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
 }

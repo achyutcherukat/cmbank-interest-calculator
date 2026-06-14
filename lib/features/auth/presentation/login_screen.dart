@@ -147,7 +147,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   const Icon(
                     Icons.account_balance,
-                    color: CMBankTheme.primary,
+                    color: CMBColors.navy,
                     size: 64,
                   ),
                   const SizedBox(height: 18),
@@ -155,7 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     'CM Bank',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: CMBankTheme.primary,
+                      color: CMBColors.navy,
                       fontSize: 30,
                       fontWeight: FontWeight.bold,
                     ),
@@ -205,9 +205,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         label: const Text('USE FINGERPRINT'),
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size(double.infinity, 56),
-                          foregroundColor: CMBankTheme.primary,
+                          foregroundColor: CMBColors.navy,
                           side: const BorderSide(
-                            color: CMBankTheme.primary,
+                            color: CMBColors.navy,
                             width: 1.5,
                           ),
                         ),
@@ -227,14 +227,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE8EAF6),
+                        color: CMBColors.warmWhite,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: CMBankTheme.primary),
+                        border: Border.all(color: CMBColors.navy),
                       ),
                       child: const Row(
                         children: [
                           Icon(Icons.admin_panel_settings,
-                              color: CMBankTheme.primary, size: 22),
+                              color: CMBColors.navy, size: 22),
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
@@ -258,7 +258,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       decoration: InputDecoration(
                         labelText: 'Admin PIN (6 digits)',
                         prefixIcon:
-                            const Icon(Icons.admin_panel_settings_outlined),
+                            const Icon(Icons.admin_panel_settings),
                         errorText: _errorText,
                       ),
                       onSubmitted: (_) => _unlockWithAdminPin(),

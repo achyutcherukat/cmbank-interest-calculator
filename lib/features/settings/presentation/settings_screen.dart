@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/settings/app_settings_repository.dart';
+import '../../../shared/widgets/flow_widgets.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -46,7 +47,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('OK',
-                  style: TextStyle(fontSize: 18, color: Color(0xFF1A237E))),
+                  style: TextStyle(fontSize: 18, color: FlowColors.primary)),
             ),
           ],
         ),
@@ -68,13 +69,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A237E),
+        backgroundColor: FlowColors.primary,
         title: const Text(
           'Settings',
           style: TextStyle(
-              color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold),
+              color: FlowColors.textOnNavyLarge, fontSize: 26, fontWeight: FontWeight.w600),
         ),
-        iconTheme: const IconThemeData(color: Colors.white, size: 30),
+        iconTheme: const IconThemeData(color: FlowColors.goldRich, size: 30),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -87,13 +88,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFFE8EAF6),
+                color: FlowColors.accent,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF3949AB), width: 1.5),
+                border: Border.all(color: FlowColors.primaryLight, width: 1.5),
               ),
               child: const Row(
                 children: [
-                  Icon(Icons.info_outline, color: Color(0xFF1A237E), size: 26),
+                  Icon(Icons.info_outline, color: FlowColors.primary, size: 26),
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
@@ -112,7 +113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF1A237E)),
+                  color: FlowColors.primary),
             ),
             const SizedBox(height: 8),
             TextField(

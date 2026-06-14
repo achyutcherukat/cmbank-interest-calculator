@@ -13,6 +13,49 @@ class DatabaseMigrations {
     if (oldVersion < 2) {
       await _migrateV1toV2(db);
     }
+    if (oldVersion < 3) {
+      await _migrateV2toV3(db);
+    }
+    if (oldVersion < 4) {
+      await _migrateV3toV4(db);
+    }
+    if (oldVersion < 5) {
+      await _migrateV4toV5(db);
+    }
+    if (oldVersion < 6) {
+      await _migrateV5toV6(db);
+    }
+  }
+
+  static Future<void> _migrateV5toV6(Database db) async {
+    await db.execute('ALTER TABLE customers ADD COLUMN district TEXT');
+    await db.execute('ALTER TABLE customers ADD COLUMN state TEXT');
+    await db.execute('ALTER TABLE customers ADD COLUMN pin_code TEXT');
+  }
+
+  static Future<void> _migrateV4toV5(Database db) async {
+    await db.execute(DatabaseSchema.createDailyStock);
+  }
+
+  static Future<void> _migrateV3toV4(Database db) async {
+    await db.execute(
+      'ALTER TABLE pledges ADD COLUMN form_photo_paths TEXT',
+    );
+  }
+
+  static Future<void> _migrateV2toV3(Database db) async {
+    await db.execute(
+      'ALTER TABLE pledges ADD COLUMN actual_item_value REAL NOT NULL DEFAULT 0',
+    );
+    await db.execute(
+      'ALTER TABLE customers ADD COLUMN id_proof_photo_paths TEXT',
+    );
+    await db.execute(
+      'ALTER TABLE pledge_items ADD COLUMN photo_paths TEXT',
+    );
+    await db.execute(
+      'ALTER TABLE pledge_items ADD COLUMN notes TEXT',
+    );
   }
 
   static Future<void> _migrateV1toV2(Database db) async {

@@ -110,7 +110,7 @@ class _StartupLoadingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Scaffold(
       body: Center(
-        child: CircularProgressIndicator(color: CMBankTheme.primary),
+        child: CircularProgressIndicator(color: CMBColors.navy),
       ),
     );
   }
