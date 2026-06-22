@@ -1,5 +1,43 @@
 import '../../../core/database/app_database.dart';
+import '../../../core/settings/app_settings_repository.dart';
+import '../../accounts/data/daily_balance_repository.dart';
+import '../../accounts/data/day_reconciliation_repository.dart';
 import '../../calculator/data/interest_calculator.dart';
+import 'audit_log_repository.dart';
+
+/// Human-readable pledge age.
+///
+/// * `< 30 days`  → "15 days"
+/// * `< 365 days` → "8 months, 10 days" (day part dropped when zero)
+/// * `>= 365 days`→ "1 year, 1 month, 5 days" (zero parts dropped)
+///
+/// Singular/plural handled per unit. Used everywhere age is shown in the
+/// ageing section (summary + drill down).
+String formatPledgeAge(int days) {
+  if (days < 0) days = 0;
+
+  String unit(int n, String singular) =>
+      '$n ${n == 1 ? singular : '${singular}s'}';
+
+  if (days < 30) return unit(days, 'day');
+
+  if (days < 365) {
+    final months = days ~/ 30;
+    final remDays = days % 30;
+    final parts = <String>[unit(months, 'month')];
+    if (remDays > 0) parts.add(unit(remDays, 'day'));
+    return parts.join(', ');
+  }
+
+  final years = days ~/ 365;
+  final afterYears = days % 365;
+  final months = afterYears ~/ 30;
+  final remDays = afterYears % 30;
+  final parts = <String>[unit(years, 'year')];
+  if (months > 0) parts.add(unit(months, 'month'));
+  if (remDays > 0) parts.add(unit(remDays, 'day'));
+  return parts.join(', ');
+}
 
 // ─── Session ──────────────────────────────────────────────────────────────────
 
@@ -29,21 +67,47 @@ class AdminOverview {
   final int totalCustomers;
 }
 
-class TodaySummary {
-  const TodaySummary({
-    required this.newPledgesCount,
-    required this.newPledgesAmount,
-    required this.closedPledgesCount,
-    required this.closedPledgesAmount,
+class TodayActivity {
+  const TodayActivity({
+    required this.newCount,
+    required this.newAmount,
+    required this.closedCount,
+    required this.closedAmount,
     required this.interestCollected,
-    required this.netCashMovement,
+    required this.activeCustomers,
   });
-  final int newPledgesCount;
-  final double newPledgesAmount;
-  final int closedPledgesCount;
-  final double closedPledgesAmount;
+  final int newCount;
+  final double newAmount;
+  final int closedCount;
+  final double closedAmount;
   final double interestCollected;
-  final double netCashMovement;
+  final int activeCustomers;
+}
+
+/// One day's row of the gold-account ledger.
+class GoldAccountDay {
+  const GoldAccountDay({
+    required this.date,
+    required this.opening,
+    required this.moneyIn,
+    required this.moneyOut,
+    required this.closing,
+  });
+  final String date; // ISO yyyy-MM-dd
+  final double opening;
+  final double moneyIn;
+  final double moneyOut;
+  final double closing;
+}
+
+/// Headline gold-account figures for the dashboard card.
+class GoldAccountSummary {
+  const GoldAccountSummary({
+    required this.currentBalance,
+    required this.yesterdayBalance,
+  });
+  final double currentBalance;
+  final double yesterdayBalance;
 }
 
 class AgeingBucket {
@@ -81,24 +145,35 @@ class AgeingPledge {
   final int daysOld;
   final String? customerName;
 
-  String get ageLabel {
-    final months = daysOld ~/ 30;
-    final days = daysOld % 30;
-    if (months == 0) return '$daysOld days';
-    if (days == 0) return '$months months';
-    return '$months months $days days';
-  }
+  String get ageLabel => formatPledgeAge(daysOld);
 }
 
-class InterestSummary {
-  const InterestSummary({
-    required this.thisMonth,
-    required this.lastMonth,
-    required this.thisYear,
+class ActivityPledge {
+  const ActivityPledge({
+    required this.id,
+    required this.pledgeNumber,
+    required this.principalAmount,
+    required this.interestPaid,
+    required this.status,
+    this.customerName,
   });
-  final double thisMonth;
-  final double lastMonth;
-  final double thisYear;
+  final int id;
+  final String pledgeNumber;
+  final double principalAmount;
+  final double interestPaid;
+  final String status;
+  final String? customerName;
+}
+
+class ActivityCustomer {
+  const ActivityCustomer({
+    required this.id,
+    required this.name,
+    this.phone,
+  });
+  final int id;
+  final String name;
+  final String? phone;
 }
 
 class BusinessHealth {
@@ -116,46 +191,37 @@ class BusinessHealth {
 
 class ReportData {
   const ReportData({
-    required this.newPledgesCount,
-    required this.newPledgesAmount,
-    required this.closedCount,
-    required this.closedAmount,
-    required this.renewedCount,
-    required this.renewedAmount,
-    required this.closingOpenCount,
-    required this.closingOpenAmount,
+    required this.pledgeCount,
+    required this.totalDisbursedPledges,
+    required this.redeemedCount,
+    required this.totalAmountRedeemed,
+    required this.maxDayDisbursedAmount,
+    required this.maxDayDisbursedDate,
     required this.goldReceived,
     required this.goldReleased,
     required this.goldStock,
-    required this.purityBreakdown,
-    required this.totalDisbursed,
-    required this.totalCollected,
+    required this.goldStockDate,
     required this.totalInterest,
     required this.totalExpenses,
     required this.expenseBreakdown,
-    required this.netPosition,
   });
 
-  final int newPledgesCount;
-  final double newPledgesAmount;
-  final int closedCount;
-  final double closedAmount;
-  final int renewedCount;
-  final double renewedAmount;
-  final int closingOpenCount;
-  final double closingOpenAmount;
+  // Pledge Summary
+  final int pledgeCount;              // pledges opened in period (any status, by start_date)
+  final double totalDisbursedPledges; // sum of principal_amount for pledges opened in period
+  final int redeemedCount;            // pledges closed in period (status='closed', by closure_date)
+  final double totalAmountRedeemed;   // sum of principal_amount for pledges closed in period
+  final double maxDayDisbursedAmount; // highest single-day principal sum in period
+  final String maxDayDisbursedDate;   // ISO date of that day ('' if no data)
 
   final double goldReceived;
   final double goldReleased;
-  final double goldStock;
-  final List<Map<String, dynamic>> purityBreakdown;
+  final double? goldStock;    // null = no daily_stock record on or before period end
+  final String goldStockDate; // ISO date of the daily_stock row used ('' if none)
 
-  final double totalDisbursed;
-  final double totalCollected;
   final double totalInterest;
   final double totalExpenses;
   final List<Map<String, dynamic>> expenseBreakdown;
-  final double netPosition;
 }
 
 // ─── Repository ───────────────────────────────────────────────────────────────
@@ -173,9 +239,8 @@ class AdminRepository {
           "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
           "FROM pledges WHERE status='open'"),
       db.rawQuery(
-          "SELECT COALESCE(SUM(pi.net_weight),0) as g "
-          "FROM pledge_items pi JOIN pledges p ON pi.pledge_id=p.id "
-          "WHERE p.status='open'"),
+          "SELECT COALESCE(SUM(net_weight),0) as g "
+          "FROM pledges WHERE status='open'"),
       db.rawQuery(
           "SELECT COUNT(DISTINCT customer_id) as c FROM pledges "
           "WHERE status='open' AND customer_id IS NOT NULL"),
@@ -189,39 +254,125 @@ class AdminRepository {
     );
   }
 
-  // ── Today ─────────────────────────────────────────────────────────────────────
+  // ── Today's Activity ───────────────────────────────────────────────────────
 
-  Future<TodaySummary> getTodaySummary() async {
+  Future<TodayActivity> getTodayActivity({DateTime? date}) async {
     final db = await AppDatabase.instance.database;
-    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final d = (date ?? DateTime.now()).toIso8601String().substring(0, 10);
 
     final results = await Future.wait([
+      // 0 — New loans: all pledges started on the given date regardless of status.
       db.rawQuery(
           "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
-          "FROM pledges WHERE start_date=?",
-          [today]),
+          "FROM pledges WHERE DATE(start_date)=?",
+          [d]),
+      // 1 — Closed loans on the given date (principal only, no interest).
       db.rawQuery(
-          "SELECT COUNT(*) as c, COALESCE(SUM(total_amount_collected),0) as s "
-          "FROM pledges WHERE closure_date=? AND status IN ('closed','renewed')",
-          [today]),
+          "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
+          "FROM pledges WHERE status='closed' AND DATE(closure_date)=?",
+          [d]),
+      // 2 — Interest collected on the given date (from pledge closures).
       db.rawQuery(
           "SELECT COALESCE(SUM(total_interest_paid),0) as s FROM pledges "
-          "WHERE closure_date=? AND status IN ('closed','renewed')",
-          [today]),
+          "WHERE status='closed' AND DATE(closure_date)=?",
+          [d]),
+      // 3 — Unique customers with open pledge started or closed on the given date.
       db.rawQuery(
-          "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) as s "
-          "FROM transactions WHERE transaction_date=?",
-          [today]),
+          "SELECT COUNT(DISTINCT customer_id) as c FROM pledges "
+          "WHERE ((status='open' AND DATE(start_date)=?) "
+          "OR (status='closed' AND DATE(closure_date)=?)) "
+          "AND customer_id IS NOT NULL",
+          [d, d]),
     ]);
 
-    return TodaySummary(
-      newPledgesCount: (results[0].first['c'] as int?) ?? 0,
-      newPledgesAmount: (results[0].first['s'] as num?)?.toDouble() ?? 0,
-      closedPledgesCount: (results[1].first['c'] as int?) ?? 0,
-      closedPledgesAmount: (results[1].first['s'] as num?)?.toDouble() ?? 0,
+    return TodayActivity(
+      newCount: (results[0].first['c'] as int?) ?? 0,
+      newAmount: (results[0].first['s'] as num?)?.toDouble() ?? 0,
+      closedCount: (results[1].first['c'] as int?) ?? 0,
+      closedAmount: (results[1].first['s'] as num?)?.toDouble() ?? 0,
       interestCollected: (results[2].first['s'] as num?)?.toDouble() ?? 0,
-      netCashMovement: (results[3].first['s'] as num?)?.toDouble() ?? 0,
+      activeCustomers: (results[3].first['c'] as int?) ?? 0,
     );
+  }
+
+  /// Earliest date any pledge was created — used as the lower bound for
+  /// activity date navigation. Uses created_at so backdated start_dates
+  /// don't push the floor before the system was actually set up.
+  Future<DateTime> getFirstPledgeDate() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+        "SELECT MIN(DATE(created_at)) as d FROM pledges "
+        "WHERE created_at IS NOT NULL");
+    final raw = rows.first['d'] as String?;
+    if (raw == null) return DateTime.now();
+    return DateTime.parse(raw);
+  }
+
+  // ── Activity Drill-Down ───────────────────────────────────────────────────────
+
+  Future<List<ActivityPledge>> getNewPledgesForDate(String date) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      "SELECT p.id, p.pledge_no, p.principal_amount, p.status, "
+      "COALESCE(p.total_interest_paid,0) as tip, c.name "
+      "FROM pledges p LEFT JOIN customers c ON c.id = p.customer_id "
+      "WHERE DATE(p.start_date)=? "
+      "ORDER BY p.pledge_no ASC",
+      [date],
+    );
+    return rows
+        .map((r) => ActivityPledge(
+              id: r['id'] as int,
+              pledgeNumber: r['pledge_no'] as String,
+              principalAmount:
+                  (r['principal_amount'] as num?)?.toDouble() ?? 0,
+              interestPaid: (r['tip'] as num?)?.toDouble() ?? 0,
+              status: r['status'] as String? ?? 'open',
+              customerName: r['name'] as String?,
+            ))
+        .toList();
+  }
+
+  Future<List<ActivityPledge>> getClosedPledgesForDate(String date) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      "SELECT p.id, p.pledge_no, p.principal_amount, "
+      "COALESCE(p.total_interest_paid,0) as tip, c.name "
+      "FROM pledges p LEFT JOIN customers c ON c.id = p.customer_id "
+      "WHERE p.status='closed' AND DATE(p.closure_date)=? "
+      "ORDER BY p.pledge_no ASC",
+      [date],
+    );
+    return rows
+        .map((r) => ActivityPledge(
+              id: r['id'] as int,
+              pledgeNumber: r['pledge_no'] as String,
+              principalAmount:
+                  (r['principal_amount'] as num?)?.toDouble() ?? 0,
+              interestPaid: (r['tip'] as num?)?.toDouble() ?? 0,
+              status: 'closed',
+              customerName: r['name'] as String?,
+            ))
+        .toList();
+  }
+
+  Future<List<ActivityCustomer>> getCustomersForDate(String date) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      "SELECT DISTINCT c.id, c.name, c.phone "
+      "FROM customers c INNER JOIN pledges p ON c.id = p.customer_id "
+      "WHERE (p.status='open' AND DATE(p.start_date)=?) "
+      "OR (p.status='closed' AND DATE(p.closure_date)=?) "
+      "ORDER BY c.name ASC",
+      [date, date],
+    );
+    return rows
+        .map((r) => ActivityCustomer(
+              id: r['id'] as int,
+              name: r['name'] as String,
+              phone: r['phone'] as String?,
+            ))
+        .toList();
   }
 
   // ── Ageing Buckets ────────────────────────────────────────────────────────────
@@ -270,19 +421,21 @@ class AdminRepository {
     final db = await AppDatabase.instance.database;
 
     const daysConditions = {
-      '0': '(julianday(\'now\') - julianday(start_date)) <= 180',
+      '0': '(julianday(\'now\') - julianday(p.start_date)) <= 180',
       '1':
-          '(julianday(\'now\') - julianday(start_date)) > 180 AND (julianday(\'now\') - julianday(start_date)) <= 365',
+          '(julianday(\'now\') - julianday(p.start_date)) > 180 AND (julianday(\'now\') - julianday(p.start_date)) <= 365',
       '2':
-          '(julianday(\'now\') - julianday(start_date)) > 365 AND (julianday(\'now\') - julianday(start_date)) <= 730',
-      '3': '(julianday(\'now\') - julianday(start_date)) > 730',
+          '(julianday(\'now\') - julianday(p.start_date)) > 365 AND (julianday(\'now\') - julianday(p.start_date)) <= 730',
+      '3': '(julianday(\'now\') - julianday(p.start_date)) > 730',
     };
 
     final condition = daysConditions[bucket] ?? daysConditions['0']!;
     final rows = await db.rawQuery(
-      "SELECT *, CAST(julianday('now') - julianday(start_date) AS INTEGER) as days_old "
-      "FROM pledges WHERE status='open' AND $condition "
-      "ORDER BY start_date ASC",
+      "SELECT p.*, c.name AS customer_name, "
+      "CAST(julianday('now') - julianday(p.start_date) AS INTEGER) as days_old "
+      "FROM pledges p LEFT JOIN customers c ON c.id = p.customer_id "
+      "WHERE p.status='open' AND $condition "
+      "ORDER BY p.start_date ASC",
     );
 
     final today = DateTime.now();
@@ -315,45 +468,104 @@ class AdminRepository {
     }).toList();
   }
 
-  // ── Interest Summary ──────────────────────────────────────────────────────────
+  // ── Gold Account Balance ───────────────────────────────────────────────────
 
-  Future<InterestSummary> getInterestSummary() async {
+  /// Builds the full gold-account ledger (oldest first) from the opening
+  /// balance and the pledges table. Money OUT = principal of new open pledges;
+  /// Money IN = principal of closed pledges. Each day's opening is the
+  /// previous day's closing. Always starts from the installation date
+  /// (opening_gold_account_balance_date setting).
+  Future<List<GoldAccountDay>> _goldAccountLedger() async {
     final db = await AppDatabase.instance.database;
-    final now = DateTime.now();
 
-    final thisMonthPfx =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}';
-    final lastMonthDt =
-        DateTime(now.year, now.month - 1, 1);
-    final lastMonthPfx =
-        '${lastMonthDt.year}-${lastMonthDt.month.toString().padLeft(2, '0')}';
+    final opening = await _openingGoldAccountBalance();
+    final installDateRaw = await AppSettingsRepository()
+        .getString('opening_gold_account_balance_date');
 
-    // Indian financial year: April of current year to March of next year
-    // If month >= 4, year start = this year; else year start = last year
-    final fyStartYear = now.month >= 4 ? now.year : now.year - 1;
-    final fyStart = '$fyStartYear-04-01';
-    final fyEnd = '${fyStartYear + 1}-03-31';
+    final rows = await db.rawQuery("""
+      SELECT d, SUM(in_amt) AS in_amt, SUM(out_amt) AS out_amt FROM (
+        SELECT DATE(closure_date) AS d,
+               SUM(principal_amount) AS in_amt,
+               0.0 AS out_amt
+        FROM pledges
+        WHERE status='closed' AND closure_date IS NOT NULL
+        GROUP BY DATE(closure_date)
+        UNION ALL
+        SELECT DATE(start_date) AS d,
+               0.0 AS in_amt,
+               SUM(principal_amount) AS out_amt
+        FROM pledges
+        WHERE start_date IS NOT NULL
+        GROUP BY DATE(start_date)
+      )
+      GROUP BY d
+      ORDER BY d ASC
+    """);
 
-    final results = await Future.wait([
-      db.rawQuery(
-          "SELECT COALESCE(SUM(total_interest_paid),0) as s FROM pledges "
-          "WHERE closure_date LIKE ? AND status IN ('closed','renewed')",
-          ['$thisMonthPfx%']),
-      db.rawQuery(
-          "SELECT COALESCE(SUM(total_interest_paid),0) as s FROM pledges "
-          "WHERE closure_date LIKE ? AND status IN ('closed','renewed')",
-          ['$lastMonthPfx%']),
-      db.rawQuery(
-          "SELECT COALESCE(SUM(total_interest_paid),0) as s FROM pledges "
-          "WHERE closure_date BETWEEN ? AND ? AND status IN ('closed','renewed')",
-          [fyStart, fyEnd]),
-    ]);
+    // Build a date → {in, out} map from SQL results
+    final byDate = <String, ({double inAmt, double outAmt})>{};
+    for (final r in rows) {
+      final d = r['d'] as String?;
+      if (d == null) continue;
+      byDate[d] = (
+        inAmt: (r['in_amt'] as num?)?.toDouble() ?? 0,
+        outAmt: (r['out_amt'] as num?)?.toDouble() ?? 0,
+      );
+    }
 
-    return InterestSummary(
-      thisMonth: (results[0].first['s'] as num?)?.toDouble() ?? 0,
-      lastMonth: (results[1].first['s'] as num?)?.toDouble() ?? 0,
-      thisYear: (results[2].first['s'] as num?)?.toDouble() ?? 0,
-    );
+    // Anchor date: saved installation date → earliest pledge date → today
+    final sortedKeys = byDate.keys.toList()..sort();
+    final anchor = (installDateRaw != null && installDateRaw.trim().isNotEmpty)
+        ? installDateRaw.trim()
+        : sortedKeys.isNotEmpty
+            ? sortedKeys.first
+            : DateTime.now().toIso8601String().substring(0, 10);
+
+    // Ensure anchor date is in the map (may have zero activity)
+    byDate.putIfAbsent(anchor, () => (inAmt: 0, outAmt: 0));
+
+    final allDates = byDate.keys.where((d) => d.compareTo(anchor) >= 0).toList()..sort();
+    final days = <GoldAccountDay>[];
+    double running = opening;
+    for (final d in allDates) {
+      final entry = byDate[d]!;
+      final closing = running + entry.outAmt - entry.inAmt;
+      days.add(GoldAccountDay(
+        date: d,
+        opening: running,
+        moneyIn: entry.inAmt,
+        moneyOut: entry.outAmt,
+        closing: closing,
+      ));
+      running = closing;
+    }
+    return days;
+  }
+
+  Future<double> _openingGoldAccountBalance() async {
+    final raw = await AppSettingsRepository()
+        .getString('opening_gold_account_balance');
+    return double.tryParse((raw ?? '').replaceAll(',', '')) ?? 0;
+  }
+
+  /// Dashboard card: cumulative running balance from the ledger.
+  /// yesterdayBalance = prior day's closing, used for trend arrow.
+  Future<GoldAccountSummary> getGoldAccountSummary() async {
+    final days = await _goldAccountLedger();
+    if (days.isEmpty) {
+      final opening = await _openingGoldAccountBalance();
+      return GoldAccountSummary(currentBalance: opening, yesterdayBalance: opening);
+    }
+    final current = days.last.closing;
+    final yesterday =
+        days.length > 1 ? days[days.length - 2].closing : days.last.opening;
+    return GoldAccountSummary(currentBalance: current, yesterdayBalance: yesterday);
+  }
+
+  /// Full ledger newest-first for the drill-down screen.
+  Future<List<GoldAccountDay>> getGoldAccountDays() async {
+    final days = await _goldAccountLedger();
+    return days.reversed.toList();
   }
 
   // ── Business Health ───────────────────────────────────────────────────────────
@@ -363,15 +575,19 @@ class AdminRepository {
 
     final results = await Future.wait([
       db.rawQuery(
-          "SELECT id, pledge_no, principal_amount, start_date, customer_name, "
-          "CAST(julianday('now') - julianday(start_date) AS INTEGER) as days_old "
-          "FROM pledges WHERE status='open' "
-          "ORDER BY principal_amount DESC LIMIT 5"),
+          "SELECT p.id, p.pledge_no, p.principal_amount, p.start_date, "
+          "c.name AS customer_name, "
+          "CAST(julianday('now') - julianday(p.start_date) AS INTEGER) as days_old "
+          "FROM pledges p LEFT JOIN customers c ON c.id = p.customer_id "
+          "WHERE p.status='open' "
+          "ORDER BY p.principal_amount DESC LIMIT 5"),
       db.rawQuery(
-          "SELECT id, pledge_no, principal_amount, start_date, customer_name, "
-          "CAST(julianday('now') - julianday(start_date) AS INTEGER) as days_old "
-          "FROM pledges WHERE status='open' "
-          "ORDER BY start_date ASC LIMIT 5"),
+          "SELECT p.id, p.pledge_no, p.principal_amount, p.start_date, "
+          "c.name AS customer_name, "
+          "CAST(julianday('now') - julianday(p.start_date) AS INTEGER) as days_old "
+          "FROM pledges p LEFT JOIN customers c ON c.id = p.customer_id "
+          "WHERE p.status='open' "
+          "ORDER BY p.start_date ASC LIMIT 5"),
       db.rawQuery(
           "SELECT created_at FROM backup_log "
           "ORDER BY created_at DESC LIMIT 1"),
@@ -404,104 +620,81 @@ class AdminRepository {
     final db = await AppDatabase.instance.database;
 
     final results = await Future.wait([
-      // New pledges in period
+      // 0 — Pledges opened in period (any status, by start_date)
       db.rawQuery(
           "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
-          "FROM pledges WHERE start_date BETWEEN ? AND ?",
+          "FROM pledges WHERE DATE(start_date) BETWEEN ? AND ?",
           [fromDate, toDate]),
-      // Closed pledges in period
-      db.rawQuery(
-          "SELECT COUNT(*) as c, COALESCE(SUM(total_amount_collected),0) as s "
-          "FROM pledges WHERE closure_date BETWEEN ? AND ? AND status='closed'",
-          [fromDate, toDate]),
-      // Renewed pledges in period
-      db.rawQuery(
-          "SELECT COUNT(*) as c, COALESCE(SUM(total_amount_collected),0) as s "
-          "FROM pledges WHERE closure_date BETWEEN ? AND ? AND status='renewed'",
-          [fromDate, toDate]),
-      // Closing open pledges (open as of toDate)
+      // 1 — Pledges redeemed in period (status='closed', by closure_date)
       db.rawQuery(
           "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
-          "FROM pledges WHERE status='open' AND start_date <= ?",
-          [toDate]),
-      // Gold received (from items of pledges created in period)
+          "FROM pledges WHERE status='closed' AND DATE(closure_date) BETWEEN ? AND ?",
+          [fromDate, toDate]),
+      // 2 — Max single-day disbursement in period
+      db.rawQuery(
+          "SELECT DATE(start_date) as d, COALESCE(SUM(principal_amount),0) as s "
+          "FROM pledges WHERE DATE(start_date) BETWEEN ? AND ? "
+          "GROUP BY DATE(start_date) ORDER BY s DESC LIMIT 1",
+          [fromDate, toDate]),
+      // 3 — Gold received (items of pledges created in period)
       db.rawQuery(
           "SELECT COALESCE(SUM(pi.net_weight),0) as g "
           "FROM pledge_items pi JOIN pledges p ON pi.pledge_id=p.id "
-          "WHERE p.start_date BETWEEN ? AND ?",
+          "WHERE DATE(p.start_date) BETWEEN ? AND ?",
           [fromDate, toDate]),
-      // Gold released (from items of pledges closed in period)
+      // 4 — Gold released (items of pledges closed in period)
       db.rawQuery(
           "SELECT COALESCE(SUM(pi.net_weight),0) as g "
           "FROM pledge_items pi JOIN pledges p ON pi.pledge_id=p.id "
-          "WHERE p.closure_date BETWEEN ? AND ? AND p.status IN ('closed','renewed')",
+          "WHERE p.status='closed' AND DATE(p.closed_at) BETWEEN ? AND ?",
           [fromDate, toDate]),
-      // Current gold stock
+      // 5 — Closing gold stock from daily_stock (last record on or before period end)
       db.rawQuery(
-          "SELECT COALESCE(SUM(pi.net_weight),0) as g "
-          "FROM pledge_items pi JOIN pledges p ON pi.pledge_id=p.id "
-          "WHERE p.status='open'"),
-      // Gold by purity for new pledges in period
-      db.rawQuery(
-          "SELECT p.purity, COALESCE(SUM(pi.net_weight),0) as g, COUNT(DISTINCT p.id) as c "
-          "FROM pledge_items pi JOIN pledges p ON pi.pledge_id=p.id "
-          "WHERE p.start_date BETWEEN ? AND ? "
-          "GROUP BY p.purity ORDER BY g DESC",
+          "SELECT stock_date, closing_weight FROM daily_stock "
+          "WHERE stock_date BETWEEN ? AND ? ORDER BY stock_date DESC LIMIT 1",
           [fromDate, toDate]),
-      // Total disbursed in period (transactions)
-      db.rawQuery(
-          "SELECT COALESCE(SUM(amount),0) as s FROM transactions "
-          "WHERE type='loan_disbursed' AND transaction_date BETWEEN ? AND ?",
-          [fromDate, toDate]),
-      // Total collected in period
-      db.rawQuery(
-          "SELECT COALESCE(SUM(amount),0) as s FROM transactions "
-          "WHERE type='payment_received' AND transaction_date BETWEEN ? AND ?",
-          [fromDate, toDate]),
-      // Interest earned in period
+      // 6 — Interest earned in period
       db.rawQuery(
           "SELECT COALESCE(SUM(total_interest_paid),0) as s FROM pledges "
-          "WHERE closure_date BETWEEN ? AND ? AND status IN ('closed','renewed')",
+          "WHERE status='closed' AND DATE(closed_at) BETWEEN ? AND ?",
           [fromDate, toDate]),
-      // Expenses in period
+      // 7 — Expenses in period
       db.rawQuery(
-          "SELECT COALESCE(SUM(amount),0) as s FROM transactions "
-          "WHERE type='expense' AND transaction_date BETWEEN ? AND ?",
+          "SELECT COALESCE(SUM(amount),0) as s FROM payments "
+          "WHERE payment_type='EXPENSE' AND DATE(payment_date) BETWEEN ? AND ?",
           [fromDate, toDate]),
-      // Expense by category
+      // 8 — Expense by category (sub_category)
       db.rawQuery(
-          "SELECT ec.name, COALESCE(SUM(t.amount),0) as s "
-          "FROM transactions t LEFT JOIN expense_categories ec ON t.expense_category_id=ec.id "
-          "WHERE t.type='expense' AND t.transaction_date BETWEEN ? AND ? "
-          "GROUP BY ec.id ORDER BY s DESC",
+          "SELECT COALESCE(sub_category,'Uncategorised') AS name, "
+          "COALESCE(SUM(amount),0) as s FROM payments "
+          "WHERE payment_type='EXPENSE' AND DATE(payment_date) BETWEEN ? AND ? "
+          "GROUP BY sub_category ORDER BY s DESC",
           [fromDate, toDate]),
     ]);
 
-    final disbursed = (results[8].first['s'] as num?)?.toDouble() ?? 0;
-    final collected = (results[9].first['s'] as num?)?.toDouble() ?? 0;
-    final expenses = (results[11].first['s'] as num?)?.toDouble() ?? 0;
+    final maxRow = results[2].isNotEmpty ? results[2].first : null;
+    final maxDayDate = maxRow?['d'] as String? ?? '';
+    final maxDayAmount = (maxRow?['s'] as num?)?.toDouble() ?? 0;
 
     return ReportData(
-      newPledgesCount: (results[0].first['c'] as int?) ?? 0,
-      newPledgesAmount: (results[0].first['s'] as num?)?.toDouble() ?? 0,
-      closedCount: (results[1].first['c'] as int?) ?? 0,
-      closedAmount: (results[1].first['s'] as num?)?.toDouble() ?? 0,
-      renewedCount: (results[2].first['c'] as int?) ?? 0,
-      renewedAmount: (results[2].first['s'] as num?)?.toDouble() ?? 0,
-      closingOpenCount: (results[3].first['c'] as int?) ?? 0,
-      closingOpenAmount: (results[3].first['s'] as num?)?.toDouble() ?? 0,
-      goldReceived: (results[4].first['g'] as num?)?.toDouble() ?? 0,
-      goldReleased: (results[5].first['g'] as num?)?.toDouble() ?? 0,
-      goldStock: (results[6].first['g'] as num?)?.toDouble() ?? 0,
-      purityBreakdown:
-          results[7].map((r) => Map<String, dynamic>.from(r)).toList(),
-      totalDisbursed: disbursed,
-      totalCollected: collected,
-      totalInterest: (results[10].first['s'] as num?)?.toDouble() ?? 0,
-      totalExpenses: expenses,
+      pledgeCount: (results[0].first['c'] as int?) ?? 0,
+      totalDisbursedPledges: (results[0].first['s'] as num?)?.toDouble() ?? 0,
+      redeemedCount: (results[1].first['c'] as int?) ?? 0,
+      totalAmountRedeemed: (results[1].first['s'] as num?)?.toDouble() ?? 0,
+      maxDayDisbursedAmount: maxDayAmount,
+      maxDayDisbursedDate: maxDayDate,
+      goldReceived: (results[3].first['g'] as num?)?.toDouble() ?? 0,
+      goldReleased: (results[4].first['g'] as num?)?.toDouble() ?? 0,
+      goldStock: results[5].isEmpty
+          ? null
+          : (results[5].first['closing_weight'] as num?)?.toDouble(),
+      goldStockDate: results[5].isEmpty
+          ? ''
+          : (results[5].first['stock_date'] as String? ?? ''),
+      totalInterest: (results[6].first['s'] as num?)?.toDouble() ?? 0,
+      totalExpenses: (results[7].first['s'] as num?)?.toDouble() ?? 0,
       expenseBreakdown:
-          results[12].map((r) => Map<String, dynamic>.from(r)).toList(),
-      netPosition: collected - disbursed - expenses,
+          results[8].map((r) => Map<String, dynamic>.from(r)).toList(),
     );
   }
 
@@ -519,32 +712,17 @@ class AdminRepository {
   }
 
   Future<void> unlockDay(String date, String reason) async {
-    final db = await AppDatabase.instance.database;
-    final now = DateTime.now().toIso8601String();
-
-    await db.transaction((txn) async {
-      await txn.update(
-        'daily_balance',
-        {
-          'is_locked': 0,
-          'locked_at': null,
-          'locked_by': null,
-          'updated_at': now,
-        },
-        where: 'business_date = ?',
-        whereArgs: [date],
-      );
-
-      await txn.insert('audit_log', {
-        'entity_type': 'daily_balance',
-        'entity_id': date,
-        'action': 'unlock_day',
-        'old_value_json': null,
-        'new_value_json': null,
-        'reason': reason,
-        'created_by': null,
-        'created_at': now,
-      });
-    });
+    await DailyBalanceRepository.instance.unlockDay(date);
+    await DayReconciliationRepository.instance
+        .unlockReconciliation(date: date, reason: reason);
+    await AuditLogRepository.instance.log(
+      actionCategory: AuditCategory.dayManagement,
+      action: 'DAY_UNLOCKED',
+      entityType: 'daily_balance',
+      entityId: date,
+      oldValueJson: '{"is_locked":1}',
+      newValueJson: '{"is_locked":0}',
+      reason: reason,
+    );
   }
 }

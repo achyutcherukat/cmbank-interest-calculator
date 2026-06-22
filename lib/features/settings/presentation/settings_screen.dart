@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
@@ -15,19 +16,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _settingsRepository = AppSettingsRepository();
   final TextEditingController _rateController = TextEditingController();
   bool _saved = false;
+  bool _biometricEnabled = false;
+  bool _biometricAvailable = false;
 
   @override
   void initState() {
     super.initState();
     _loadRate();
+    _loadBiometric();
   }
 
   Future<void> _loadRate() async {
-    final val = await _settingsRepository.getString('default_interest_rate');
+    final val = await _settingsRepository.getString('interest_rate') ??
+        await _settingsRepository.getString('default_interest_rate');
     final rate = double.tryParse(val ?? '') ?? 18.0;
     setState(() {
       _rateController.text = rate.toStringAsFixed(2);
     });
+  }
+
+  Future<void> _loadBiometric() async {
+    final enabled = await _settingsRepository.getBool('biometric_enabled');
+    final auth = LocalAuthentication();
+    final canCheck = await auth.canCheckBiometrics;
+    final isSupported = await auth.isDeviceSupported();
+    if (mounted) {
+      setState(() {
+        _biometricEnabled = enabled;
+        _biometricAvailable = canCheck && isSupported;
+      });
+    }
+  }
+
+  Future<void> _saveBiometric(bool value) async {
+    await _settingsRepository.upsertMany({
+      'biometric_enabled': (value: value.toString(), type: 'bool'),
+    });
+    setState(() => _biometricEnabled = value);
   }
 
   Future<void> _saveRate() async {
@@ -56,7 +81,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     await _settingsRepository.upsertMany({
-      'default_interest_rate': (value: rate.toStringAsFixed(2), type: 'double'),
+      'interest_rate': (value: rate.toStringAsFixed(2), type: 'string'),
     });
 
     setState(() => _saved = true);
@@ -157,6 +182,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ],
+
+            const SizedBox(height: 32),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              'Security',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: FlowColors.primary),
+            ),
+            const SizedBox(height: 4),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              activeThumbColor: FlowColors.goldRich,
+              title: const Text(
+                'Fingerprint Login',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                _biometricAvailable
+                    ? 'Use fingerprint to unlock the app'
+                    : 'Fingerprint not available on this device',
+                style:
+                    const TextStyle(fontSize: 14, color: Colors.black54),
+              ),
+              value: _biometricEnabled,
+              onChanged: _biometricAvailable ? _saveBiometric : null,
+            ),
 
             const SizedBox(height: 30),
           ],

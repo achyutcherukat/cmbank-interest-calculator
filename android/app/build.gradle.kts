@@ -6,12 +6,16 @@ plugins {
 
 android {
     namespace = "com.example.cmbank_interest_calculator"
-    compileSdk = flutter.compileSdkVersion
+    // Pinned to 36: some plugins (flutter_plugin_android_lifecycle) require it.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Required by flutter_local_notifications (and other plugins) on
+        // older Android API levels.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -19,10 +23,12 @@ android {
         applicationId = "com.example.cmbank_interest_calculator"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // flutter_local_notifications + secure storage need minSdk >= 23.
+        minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -42,4 +48,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

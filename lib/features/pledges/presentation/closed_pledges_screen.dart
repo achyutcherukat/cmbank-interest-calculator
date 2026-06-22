@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restorable_photo_thumb.dart';
 import '../data/payment_model.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
@@ -72,37 +73,25 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
     );
   }
 
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'renewed':
+  String _statusLabel(String? renewType) {
+    switch (renewType) {
+      case 'RENEWED':
         return 'RENEWED';
-      case 'migrated':
-        return 'MIGRATED';
+      case 'PART_PAYMENT':
+        return 'PART PAYMENT';
+      case 'LOAN_INCREASE':
+        return 'LOAN TOP-UP';
       default:
-        return 'CLOSED';
+        return 'RELEASED';
     }
   }
 
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'renewed':
-        return FlowColors.orange;
-      case 'migrated':
-        return Colors.purple;
-      default:
-        return FlowColors.red;
-    }
+  Color _statusColor(String? renewType) {
+    return renewType == null ? FlowColors.red : FlowColors.orange;
   }
 
-  Color _statusBg(String status) {
-    switch (status) {
-      case 'renewed':
-        return FlowColors.orangeLight;
-      case 'migrated':
-        return const Color(0xFFF3E5F5);
-      default:
-        return FlowColors.redLight;
-    }
+  Color _statusBg(String? renewType) {
+    return renewType == null ? FlowColors.redLight : FlowColors.orangeLight;
   }
 
   @override
@@ -112,7 +101,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
         foregroundColor: FlowColors.goldRich,
-        title: const Text('Closed Pledges'),
+        title: const Text('Closed Loans'),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -148,7 +137,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
                       backgroundColor: FlowColors.redLight,
                       borderColor: FlowColors.red,
                       child: Text(
-                        'No closed pledge found for that number.',
+                        'No closed loan found for that number.',
                         style: TextStyle(
                             color: FlowColors.red,
                             fontWeight: FontWeight.bold),
@@ -156,10 +145,10 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
                     ),
                   ],
                   const SizedBox(height: 18),
-                  const FlowSectionTitle('Recent Closed Pledges'),
+                  const FlowSectionTitle('Recent Closed Loans'),
                   if (_recentClosed.isEmpty)
                     const FlowCard(
-                      child: Text('No closed pledges yet.',
+                      child: Text('No closed loans yet.',
                           style: TextStyle(color: Colors.black54)),
                     )
                   else
@@ -201,7 +190,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
                               color: FlowColors.primary,
                               fontSize: 16,
                               fontWeight: FontWeight.bold)),
-                      if (p.source == 'manual') ...[
+                      if (p.source == 'migrated') ...[
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -210,7 +199,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
                             color: FlowColors.goldLight,
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: const Text('Manual',
+                          child: const Text('Migrated',
                               style: TextStyle(
                                   fontSize: 11,
                                   color: FlowColors.gold,
@@ -233,9 +222,10 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
             ),
             const SizedBox(width: 8),
             StatusBadge(
-              text: _statusLabel(p.status),
-              color: _statusColor(p.status),
-              backgroundColor: _statusBg(p.status),
+              text: _statusLabel(p.renewType),
+              color: _statusColor(p.renewType),
+              backgroundColor: _statusBg(p.renewType),
+              borderColor: _statusColor(p.renewType),
             ),
           ],
         ),
@@ -348,52 +338,52 @@ class _ClosedPledgeDetailScreenState
     }
   }
 
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'renewed':
+  String _statusLabel(String? renewType) {
+    switch (renewType) {
+      case 'RENEWED':
         return 'RENEWED';
-      case 'migrated':
-        return 'MIGRATED';
+      case 'PART_PAYMENT':
+        return 'PART PAYMENT';
+      case 'LOAN_INCREASE':
+        return 'LOAN TOP-UP';
       default:
-        return 'CLOSED';
+        return 'RELEASED';
     }
   }
 
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'renewed':
-        return FlowColors.orange;
-      case 'migrated':
-        return Colors.purple;
-      default:
-        return FlowColors.red;
-    }
+  Color _statusColor(String? renewType) {
+    return renewType == null ? FlowColors.red : FlowColors.orange;
   }
 
-  Color _statusBg(String status) {
-    switch (status) {
-      case 'renewed':
-        return FlowColors.orangeLight;
-      case 'migrated':
-        return const Color(0xFFF3E5F5);
-      default:
-        return FlowColors.redLight;
-    }
+  Color _statusBg(String? renewType) {
+    return renewType == null ? FlowColors.redLight : FlowColors.orangeLight;
   }
 
   String _paymentTypeLabel(String type) {
     switch (type) {
-      case 'closure':
+      case 'LOAN_DISBURSED':
+        return 'Loan Disbursed';
+      case 'LOAN_FULL_CLOSURE':
         return 'Closure';
-      case 'renewal':
-        return 'Renewal';
-      case 'interest':
-        return 'Interest';
-      case 'principal':
-        return 'Principal';
+      case 'RENEWAL_INTEREST_PAID':
+        return 'Renewal Interest';
+      case 'PART_PAYMENT_RECEIVED':
+        return 'Part Payment';
+      case 'LOAN_INCREASE_DISBURSED':
+        return 'Loan Top-Up';
+      case 'EXPENSE':
+        return 'Expense';
+      case 'ADJUSTMENT':
+        return 'Adjustment';
       default:
         return type;
     }
+  }
+
+  String _paymentModeLabel(PaymentModel p) {
+    if (p.cashAmount > 0 && p.upiAmount > 0) return 'SPLIT';
+    if (p.upiAmount > 0) return 'UPI';
+    return 'CASH';
   }
 
   @override
@@ -439,11 +429,21 @@ class _ClosedPledgeDetailScreenState
           Row(
             children: [
               StatusBadge(
-                text: _statusLabel(p.status),
-                color: _statusColor(p.status),
-                backgroundColor: _statusBg(p.status),
+                text: _statusLabel(p.renewType),
+                color: _statusColor(p.renewType),
+                backgroundColor: _statusBg(p.renewType),
+                borderColor: _statusColor(p.renewType),
               ),
-              if (p.source == 'manual') ...[
+              if (p.status == 'closed') ...[
+                const SizedBox(width: 8),
+                StatusBadge(
+                  text: 'CLOSED',
+                  color: FlowColors.red,
+                  backgroundColor: FlowColors.redLight,
+                  borderColor: FlowColors.red,
+                ),
+              ],
+              if (p.source == 'migrated') ...[
                 const SizedBox(width: 10),
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -452,7 +452,7 @@ class _ClosedPledgeDetailScreenState
                     color: FlowColors.goldLight,
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Text('Manual Entry',
+                  child: const Text('Migrated',
                       style: TextStyle(
                           fontSize: 13,
                           color: FlowColors.gold,
@@ -476,6 +476,10 @@ class _ClosedPledgeDetailScreenState
                 DetailRow(
                     label: 'Closure Date',
                     value: isoToDisplay(p.closureDate)),
+                if (p.renewType != null)
+                  DetailRow(
+                      label: 'Type',
+                      value: renewalLabel(p.renewType, p.renewSubtype)),
                 DetailRow(
                     label: 'Days Held',
                     value: '$daysHeld days',
@@ -592,10 +596,7 @@ class _ClosedPledgeDetailScreenState
                     Builder(builder: (_) {
                       final paths = _parsePhotoPaths(
                           _customer!['id_proof_photo_paths']);
-                      final existing = paths
-                          .where((p) => File(p).existsSync())
-                          .toList();
-                      if (existing.isEmpty) return const SizedBox.shrink();
+                      if (paths.isEmpty) return const SizedBox.shrink();
                       return Padding(
                         padding: const EdgeInsets.only(top: 10),
                         child: Column(
@@ -610,8 +611,19 @@ class _ClosedPledgeDetailScreenState
                             Wrap(
                               spacing: 8,
                               runSpacing: 8,
-                              children: existing
-                                  .map((path) => _photoThumb(path))
+                              children: paths
+                                  .map((path) => RestorablePhotoThumb(
+                                        localPath: path,
+                                        width: 100,
+                                        height: 80,
+                                        onView: (resolved) => Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  _ClosedPhotoViewScreen(
+                                                      file: File(resolved))),
+                                        ),
+                                      ))
                                   .toList(),
                             ),
                           ],
@@ -634,7 +646,7 @@ class _ClosedPledgeDetailScreenState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (_items[i].itemType.isNotEmpty &&
-                        _items[i].itemType != 'other')
+                        _items[i].itemType != 'Other')
                       DetailRow(
                           label: 'Type',
                           value: _items[i].itemType),
@@ -657,28 +669,33 @@ class _ClosedPledgeDetailScreenState
                       DetailRow(
                           label: 'Notes',
                           value: _items[i].notes!,
-                          isLast: _items[i].photoPaths.isEmpty),
-                    if (_items[i].photoPaths.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      const Text('Photos',
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.black54,
-                              fontWeight: FontWeight.w500)),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: _items[i]
-                            .photoPaths
-                            .where((p) => File(p).existsSync())
-                            .map((p) => _photoThumb(p))
-                            .toList(),
-                      ),
-                    ],
+                          isLast: true),
                   ],
                 ),
               ),
+
+          // ── Gold Photos (now stored at pledge level) ───────────────────────
+          if ((p.goldPhotoPaths ?? []).isNotEmpty)
+            FlowCard(
+              header: 'Gold Photos',
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: p.goldPhotoPaths!
+                    .map((ph) => RestorablePhotoThumb(
+                          localPath: ph,
+                          width: 100,
+                          height: 80,
+                          onView: (resolved) => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => _ClosedPhotoViewScreen(
+                                    file: File(resolved))),
+                          ),
+                        ))
+                    .toList(),
+              ),
+            ),
 
           // ── Payment Breakdown ─────────────────────────────────────────────
           if (_payments.isNotEmpty)
@@ -690,18 +707,17 @@ class _ClosedPledgeDetailScreenState
                   const FlowCardTitle('Payment Breakdown'),
                   for (int i = 0; i < _payments.length; i++) ...[
                     if (i > 0) const Divider(height: 20),
-                    if (_payments.length > 1)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '${_paymentTypeLabel(_payments[i].paymentType)} · ${isoToDisplay(_payments[i].paymentDate.length >= 10 ? _payments[i].paymentDate.substring(0, 10) : _payments[i].paymentDate)}',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              color: Colors.black54,
-                              fontWeight: FontWeight.w500),
-                        ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${_paymentTypeLabel(_payments[i].paymentType)} · ${isoToDisplay(_payments[i].paymentDate.length >= 10 ? _payments[i].paymentDate.substring(0, 10) : _payments[i].paymentDate)}',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.black54,
+                            fontWeight: FontWeight.w500),
                       ),
-                    if (_payments.length > 1) const SizedBox(height: 6),
+                    ),
+                    const SizedBox(height: 6),
                     DetailRow(
                         label: 'Total',
                         value: money(_payments[i].amount)),
@@ -715,7 +731,7 @@ class _ClosedPledgeDetailScreenState
                           value: money(_payments[i].upiAmount)),
                     DetailRow(
                         label: 'Mode',
-                        value: _payments[i].paymentMode.toUpperCase(),
+                        value: _paymentModeLabel(_payments[i]),
                         isLast: i == _payments.length - 1),
                   ],
                 ],
@@ -796,31 +812,6 @@ class _ClosedPledgeDetailScreenState
     );
   }
 
-  Widget _photoThumb(String path) {
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-            builder: (_) => _ClosedPhotoViewScreen(file: File(path))),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: Image.file(
-          File(path),
-          height: 80,
-          width: 100,
-          fit: BoxFit.cover,
-          errorBuilder: (_, e, s) => Container(
-            height: 80,
-            width: 100,
-            color: Colors.black12,
-            child: const Icon(Icons.broken_image,
-                color: Colors.black26),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 // ─── Photo Fullscreen Viewer ──────────────────────────────────────────────────

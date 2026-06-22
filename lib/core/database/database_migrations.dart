@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import 'database_tables.dart';
+import 'seed_data.dart';
 
 class DatabaseMigrations {
   const DatabaseMigrations._();
@@ -25,6 +26,59 @@ class DatabaseMigrations {
     if (oldVersion < 6) {
       await _migrateV5toV6(db);
     }
+    if (oldVersion < 7) {
+      await _migrateV6toV7(db);
+    }
+    if (oldVersion < 8) {
+      await _migrateV7toV8(db);
+    }
+  }
+
+  static Future<void> _migrateV7toV8(Database db) async {
+    await db.execute(
+      'ALTER TABLE daily_stock ADD COLUMN opening_gross_weight REAL NOT NULL DEFAULT 0',
+    );
+    await db.execute(
+      'ALTER TABLE daily_stock ADD COLUMN gold_in_gross_weight REAL',
+    );
+    await db.execute(
+      'ALTER TABLE daily_stock ADD COLUMN gold_out_gross_weight REAL',
+    );
+    await db.execute(
+      'ALTER TABLE daily_stock ADD COLUMN adjustment_gross_weight REAL',
+    );
+    await db.execute(
+      'ALTER TABLE daily_stock ADD COLUMN closing_gross_weight REAL',
+    );
+  }
+
+  /// Major schema overhaul (Step 1). Test data only — all existing rows are
+  /// discarded. Every legacy table is dropped and recreated fresh from the
+  /// canonical schema in [DatabaseSchema], then default data is re-seeded.
+  /// App code is updated in later steps; the app may not work correctly
+  /// against this schema until then.
+  static Future<void> _migrateV6toV7(Database db) async {
+    await db.execute('PRAGMA foreign_keys = OFF');
+
+    // Drop every legacy table (clears all data in the process).
+    for (final table in DatabaseSchema.legacyTables) {
+      await db.execute('DROP TABLE IF EXISTS $table');
+    }
+    // Drop any new tables too, in case a partial v7 was applied previously.
+    await db.execute('DROP TABLE IF EXISTS stock_adjustments');
+    await db.execute('DROP TABLE IF EXISTS photo_sync_log');
+    await db.execute('DROP TABLE IF EXISTS item_types');
+    await db.execute('DROP TABLE IF EXISTS purity_types');
+
+    // Recreate all tables fresh from the canonical schema.
+    for (final statement in DatabaseSchema.allCreateStatements) {
+      await db.execute(statement);
+    }
+
+    // Re-seed default data.
+    await SeedData.insertDefaults(db);
+
+    await db.execute('PRAGMA foreign_keys = ON');
   }
 
   static Future<void> _migrateV5toV6(Database db) async {

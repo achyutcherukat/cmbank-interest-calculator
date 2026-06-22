@@ -179,6 +179,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
                             _pledgeSummaryCard(),
                             _goldSummaryCard(),
                             _financialCard(),
+                            _expensesCard(),
                             _exportCard(),
                           ],
                         ),
@@ -278,23 +279,35 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   // ── Pledge Summary ────────────────────────────────────────────────────────────
 
+  String _ordinalDate(String isoDate) {
+    final dt = DateTime.tryParse(isoDate);
+    if (dt == null) return isoDate;
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    final d = dt.day;
+    final suffix = (d >= 11 && d <= 13)
+        ? 'th'
+        : ['th', 'st', 'nd', 'rd', 'th'][d % 10 > 3 ? 0 : d % 10];
+    return '$d$suffix ${months[dt.month - 1]} ${dt.year}';
+  }
+
   Widget _pledgeSummaryCard() {
     final d = _data!;
+    final maxText = d.maxDayDisbursedDate.isEmpty
+        ? '—'
+        : '${money(d.maxDayDisbursedAmount)} on ${_ordinalDate(d.maxDayDisbursedDate)}';
     return FlowCard(
       header: 'PLEDGE SUMMARY',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _reportRow('New Pledges',
-              '${d.newPledgesCount}  (${money(d.newPledgesAmount)})'),
-          _reportRow('Redeemed / Closed',
-              '${d.closedCount}  (${money(d.closedAmount)})'),
-          _reportRow('Renewed',
-              '${d.renewedCount}  (${money(d.renewedAmount)})'),
-          _reportRow('Auctioned', '0  (—)'),
-          _reportRow('Closing Open',
-              '${d.closingOpenCount}  (${money(d.closingOpenAmount)})',
-              isLast: true),
+          _reportRow('Pledge Count', '${d.pledgeCount}'),
+          _reportRow('Total Amount Disbursed', money(d.totalDisbursedPledges)),
+          _reportRow('Pledges Redeemed', '${d.redeemedCount}'),
+          _reportRow('Total Amount Redeemed', money(d.totalAmountRedeemed)),
+          _reportRow('Max Disbursed in a Day', maxText, isLast: true),
         ],
       ),
     );
@@ -304,6 +317,12 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   Widget _goldSummaryCard() {
     final d = _data!;
+    final stockText = d.goldStock == null
+        ? '—'
+        : '${d.goldStock!.toStringAsFixed(2)} g';
+    final stockLabel = d.goldStockDate.isEmpty
+        ? 'Closing Stock'
+        : 'Closing Stock on ${_ordinalDate(d.goldStockDate)}';
     return FlowCard(
       header: 'GOLD SUMMARY',
       child: Column(
@@ -311,31 +330,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
         children: [
           _reportRow('Received', '${d.goldReceived.toStringAsFixed(2)} g'),
           _reportRow('Released', '${d.goldReleased.toStringAsFixed(2)} g'),
-          _reportRow('Auctioned', '0.00 g'),
-          _reportRow('Closing Stock', '${d.goldStock.toStringAsFixed(2)} g',
-              isLast: d.purityBreakdown.isEmpty),
-          if (d.purityBreakdown.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Text('BY PURITY',
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black45,
-                    letterSpacing: 0.8)),
-            const SizedBox(height: 6),
-            ...d.purityBreakdown.asMap().entries.map((e) {
-              final r = e.value;
-              final isLast = e.key == d.purityBreakdown.length - 1;
-              final grams =
-                  (r['g'] as num?)?.toDouble() ?? 0;
-              final count = (r['c'] as int?) ?? 0;
-              return _reportRow(
-                r['purity'] as String? ?? '—',
-                '${grams.toStringAsFixed(2)} g  ($count pledges)',
-                isLast: isLast,
-              );
-            }),
-          ],
+          _reportRow(stockLabel, stockText, isLast: true),
         ],
       ),
     );
@@ -350,43 +345,31 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _reportRow('Total Disbursed', money(d.totalDisbursed),
+          _reportRow('Total Disbursed', money(d.totalDisbursedPledges),
               valueColor: FlowColors.red),
-          _reportRow('Total Collected', money(d.totalCollected),
+          _reportRow('Total Redeemed', money(d.totalAmountRedeemed),
               valueColor: FlowColors.green),
-          _reportRow('Interest Earned', money(d.totalInterest)),
-          _reportRow('Total Expenses', money(d.totalExpenses),
-              valueColor: FlowColors.orange,
-              isLast: d.expenseBreakdown.isEmpty),
-          if (d.expenseBreakdown.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Text('EXPENSES BY CATEGORY',
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black45,
-                    letterSpacing: 0.8)),
-            const SizedBox(height: 6),
-            ...d.expenseBreakdown.asMap().entries.map((e) {
-              final r = e.value;
-              final isLast = e.key == d.expenseBreakdown.length - 1;
-              return _reportRow(
+          _reportRow('Interest Earned', money(d.totalInterest), isLast: true),
+        ],
+      ),
+    );
+  }
+
+  // ── Expenses ──────────────────────────────────────────────────────────────────
+
+  Widget _expensesCard() {
+    final d = _data!;
+    return FlowCard(
+      header: 'EXPENSES',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ...d.expenseBreakdown.map((r) => _reportRow(
                 r['name'] as String? ?? 'Uncategorised',
                 money((r['s'] as num?)?.toDouble() ?? 0),
-                isLast: isLast && d.netPosition == 0,
-              );
-            }),
-          ],
-          const SizedBox(height: 10),
-          const Divider(color: Color(0xFFEEEEEE)),
-          const SizedBox(height: 10),
-          _reportRow(
-            'Net Position',
-            money(d.netPosition),
-            valueColor:
-                d.netPosition >= 0 ? FlowColors.green : FlowColors.red,
-            isLast: true,
-          ),
+              )),
+          _reportRow('Total Expenses', money(d.totalExpenses),
+              valueColor: FlowColors.orange, isLast: true),
         ],
       ),
     );

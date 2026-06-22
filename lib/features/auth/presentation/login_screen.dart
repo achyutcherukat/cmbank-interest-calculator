@@ -136,6 +136,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: CMBColors.navy,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -145,22 +146,12 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(
-                    Icons.account_balance,
-                    color: CMBColors.navy,
-                    size: 64,
+                  Image.asset(
+                    'assets/images/cmb_logo.png',
+                    width: 140,
+                    height: 140,
                   ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'CM Bank',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: CMBColors.navy,
-                      fontSize: 30,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 34),
+                  const SizedBox(height: 40),
 
                   if (!_useAdminPin) ...[
                     TextField(
@@ -183,13 +174,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 20),
                     ElevatedButton.icon(
                       onPressed: _isAuthenticating ? null : _unlockWithPin,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: CMBColors.goldRich,
+                        foregroundColor: CMBColors.navy,
+                      ),
                       icon: _isAuthenticating
                           ? const SizedBox(
                               width: 22,
                               height: 22,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.5,
-                                color: Colors.white,
+                                color: CMBColors.navy,
                               ),
                             )
                           : const Icon(Icons.login),
@@ -205,9 +200,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         label: const Text('USE FINGERPRINT'),
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size(double.infinity, 56),
-                          foregroundColor: CMBColors.navy,
+                          foregroundColor: CMBColors.goldRich,
                           side: const BorderSide(
-                            color: CMBColors.navy,
+                            color: CMBColors.goldRich,
                             width: 1.5,
                           ),
                         ),
@@ -218,7 +213,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       onPressed: _toggleAdminPin,
                       child: const Text(
                         'Forgot PIN? Use Admin PIN',
-                        style: TextStyle(fontSize: 17, color: Colors.grey),
+                        style: TextStyle(fontSize: 17, color: CMBColors.goldLight),
                       ),
                     ),
                   ] else ...[
@@ -227,19 +222,19 @@ class _LoginScreenState extends State<LoginScreen> {
                       padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
-                        color: CMBColors.warmWhite,
+                        color: Colors.white.withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: CMBColors.navy),
+                        border: Border.all(color: CMBColors.goldRich),
                       ),
                       child: const Row(
                         children: [
                           Icon(Icons.admin_panel_settings,
-                              color: CMBColors.navy, size: 22),
+                              color: CMBColors.goldRich, size: 22),
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
                               'Enter the Admin PIN to unlock.',
-                              style: TextStyle(fontSize: 17),
+                              style: TextStyle(fontSize: 17, color: CMBColors.goldLight),
                             ),
                           ),
                         ],
@@ -267,13 +262,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     ElevatedButton.icon(
                       onPressed:
                           _isAuthenticating ? null : _unlockWithAdminPin,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: CMBColors.goldRich,
+                        foregroundColor: CMBColors.navy,
+                      ),
                       icon: _isAuthenticating
                           ? const SizedBox(
                               width: 22,
                               height: 22,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.5,
-                                color: Colors.white,
+                                color: CMBColors.navy,
                               ),
                             )
                           : const Icon(Icons.login),
@@ -285,7 +284,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       onPressed: _toggleAdminPin,
                       child: const Text(
                         '← Back to Staff PIN',
-                        style: TextStyle(fontSize: 17, color: Colors.grey),
+                        style: TextStyle(fontSize: 17, color: CMBColors.goldLight),
                       ),
                     ),
                   ],

@@ -25,6 +25,7 @@ class CMBColors {
   // Semantic (do not change)
   static const moneyIn = Color(0xFF2E7D32);
   static const moneyOut = Color(0xFFC62828);
+  static const successGreen = Color(0xFF2E7D32);
   static const statusOpen = Color(0xFF2E7D32);
   static const statusClosed = Color(0xFF555555);
   static const statusRenewed = Color(0xFF1565C0);

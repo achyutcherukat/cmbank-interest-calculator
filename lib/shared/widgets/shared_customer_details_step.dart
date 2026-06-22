@@ -295,6 +295,11 @@ class SharedCustomerDetailsStepState
         _lastAddress = address;
         _showPinCodeError = false;
       });
+      // Keep the keyboard fully dismissed after auto-filling — the rebuild can
+      // otherwise re-focus a field and pop the keyboard back open.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) FocusScope.of(context).unfocus();
+      });
     }
   }
 
@@ -394,7 +399,12 @@ class SharedCustomerDetailsStepState
           'Address',
           _addressCtrl,
           icon: Icons.location_on,
-          maxLines: 2,
+          // Wrap text across lines (no horizontal scroll); show a tick/done
+          // action on the keyboard instead of a newline.
+          keyboardType: TextInputType.text,
+          textInputAction: TextInputAction.done,
+          minLines: 2,
+          maxLines: null,
           onChanged: _onAddressChanged,
         ),
         _textField(
@@ -569,7 +579,10 @@ class SharedCustomerDetailsStepState
     String label,
     TextEditingController ctrl, {
     IconData? icon,
-    int maxLines = 1,
+    int? maxLines = 1,
+    int? minLines,
+    TextInputType? keyboardType,
+    TextInputAction? textInputAction,
     void Function(String)? onChanged,
     String? errorText,
   }) {
@@ -578,6 +591,9 @@ class SharedCustomerDetailsStepState
       child: TextField(
         controller: ctrl,
         maxLines: maxLines,
+        minLines: minLines,
+        keyboardType: keyboardType,
+        textInputAction: textInputAction,
         style: const TextStyle(fontSize: 18),
         decoration: InputDecoration(
           labelText: label,

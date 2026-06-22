@@ -7,13 +7,16 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../../../core/database/app_database.dart';
+import '../../../app/theme.dart';
+import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/shared_customer_details_step.dart';
 import '../../../shared/widgets/shared_item_details_step.dart';
+import '../../customers/data/customer_repository.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
 import '../data/pledge_repository.dart';
+import 'open_pledge_screen.dart';
 
 // ─── Date formatter: types 02012023 → 02/01/2023 ─────────────────────────────
 
@@ -60,15 +63,48 @@ String _toIsoDate(String displayDate) {
   return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
 }
 
-String _todayDisplay() {
-  final now = DateTime.now();
-  return '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
-}
-
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class LoadExistingPledgeScreen extends StatefulWidget {
-  const LoadExistingPledgeScreen({super.key});
+  const LoadExistingPledgeScreen({
+    super.key,
+    this.prefilledPledgeId,
+    this.prefilledAmount,
+    this.prefilledOpenDate,
+    this.openDateEditable = true,
+    this.closeDate,
+    this.closeDateEditable = true,
+    this.sourceContext,
+    this.contextDate,
+    this.editMode = false,
+    this.existingPledge,
+    this.existingItems,
+    this.existingCustomerRow,
+    this.editReason,
+  });
+
+  /// Pre-fill values (calculator / record-closure flows).
+  final String? prefilledPledgeId;
+  final double? prefilledAmount;
+  final DateTime? prefilledOpenDate;
+  final bool openDateEditable;
+
+  /// Closure date shown as a banner; passed on to the Close/Renew flow as a
+  /// non-editable context date when [closeDateEditable] is false.
+  final DateTime? closeDate;
+  final bool closeDateEditable;
+
+  /// 'calculator' / 'daily_accounts' switches step 5 to MIGRATE & CLOSE /
+  /// MIGRATE & RENEW. Null keeps the normal single MIGRATE button.
+  final String? sourceContext;
+  final DateTime? contextDate;
+
+  // ── Edit mode ────────────────────────────────────────────────────────────────
+  final bool editMode;
+  final PledgeModel? existingPledge;
+  final List<PledgeItemModel>? existingItems;
+  final Map<String, dynamic>? existingCustomerRow;
+  final String? editReason;
 
   @override
   State<LoadExistingPledgeScreen> createState() =>
@@ -86,6 +122,9 @@ class _LoadExistingPledgeScreenState
   final _loanAmtCtrl = TextEditingController();
   final _grossWeightCtrl = TextEditingController();
   final _netWeightCtrl = TextEditingController();
+  final _loanAmtFocus = FocusNode();
+  final _grossFocus = FocusNode();
+  final _netFocus = FocusNode();
   bool _pledgeNoError = false;
   bool _pledgeDateError = false;
 
@@ -105,6 +144,9 @@ class _LoadExistingPledgeScreenState
   String? _savedPledgeNo;
   double? _savedAmount;
 
+  // ── App start date (ISO) — pledge date must be strictly before this ──────────
+  String? _appStartDate;
+
   // ── Computed getters ─────────────────────────────────────────────────────────
   double get _grossWeight =>
       double.tryParse(_grossWeightCtrl.text) ?? 0;
@@ -115,10 +157,85 @@ class _LoadExistingPledgeScreenState
   @override
   void initState() {
     super.initState();
-    _pledgeDateCtrl.text = _todayDisplay();
+    _loadAppStartDate();
+    if (widget.editMode) {
+      _prefillForEdit();
+    } else {
+      final openDate = widget.prefilledOpenDate;
+      _pledgeDateCtrl.text = openDate != null ? formatDmy(openDate) : '';
+      if (widget.prefilledPledgeId != null) {
+        _pledgeNoCtrl.text = widget.prefilledPledgeId!;
+      }
+      if (widget.prefilledAmount != null && widget.prefilledAmount! > 0) {
+        _loanAmtCtrl.text =
+            formatIndian(widget.prefilledAmount!.round().toString());
+      }
+    }
     _grossWeightCtrl.addListener(() => setState(() {}));
     _netWeightCtrl.addListener(() => setState(() {}));
     _loanAmtCtrl.addListener(() => setState(() {}));
+  }
+
+  Future<void> _loadAppStartDate() async {
+    final date = await AppSettingsRepository().getString('app_use_start_date');
+    if (mounted) setState(() => _appStartDate = date);
+  }
+
+  void _prefillForEdit() {
+    final p = widget.existingPledge;
+    if (p == null) return;
+
+    _pledgeNoCtrl.text = p.pledgeNumber;
+    final dt = DateTime.tryParse(p.pledgeDate);
+    _pledgeDateCtrl.text = dt != null ? formatDmy(dt) : p.pledgeDate;
+    _loanAmtCtrl.text = formatIndian(p.loanAmount.round().toString());
+    _grossWeightCtrl.text = p.grossWeight.toStringAsFixed(2);
+    _netWeightCtrl.text = p.netWeight.toStringAsFixed(2);
+
+    // Pre-fill form photos from stored paths
+    _formPhotos = (p.formPhotoPaths ?? []).map((ph) => File(ph)).toList();
+
+    // Pre-fill customer
+    final row = widget.existingCustomerRow;
+    if (row != null) {
+      List<File> idPhotos = [];
+      try {
+        final paths = jsonDecode(row['id_proof_photo_paths'] as String? ?? '[]') as List;
+        idPhotos = paths.map((e) => File(e as String)).toList();
+      } catch (_) {}
+      _capturedCustomer = CustomerDetailsData(
+        phone: (row['phone'] as String?) ?? '',
+        name: (row['name'] as String?) ?? '',
+        address: (row['address'] as String?) ?? '',
+        idProofType: (row['id_proof_type'] as String?) ?? 'None',
+        idNumber: (row['id_proof_number'] as String?) ?? '',
+        idProofPhotos: idPhotos,
+        existingCustomerId: row['id'] as int?,
+        pinCode: row['pin_code'] as String?,
+        district: row['district'] as String?,
+        state: row['state'] as String?,
+      );
+    }
+
+    // Pre-fill items + gold photos
+    final items = widget.existingItems ?? [];
+    final goldPhotos = (p.goldPhotoPaths ?? []).map((ph) => File(ph)).toList();
+    _capturedItems = ItemDetailsData(
+      items: items
+          .map((it) => ItemEntryData(
+                itemType: it.itemType,
+                grossWeight: it.grossWeight,
+                netWeight: it.netWeight,
+                quantity: it.quantity,
+                purity: it.purity.isNotEmpty ? it.purity : null,
+                notes: it.notes,
+              ))
+          .toList(),
+      photos: goldPhotos,
+    );
+
+    // Start on step 5
+    _step = 5;
   }
 
   @override
@@ -128,16 +245,27 @@ class _LoadExistingPledgeScreenState
     _loanAmtCtrl.dispose();
     _grossWeightCtrl.dispose();
     _netWeightCtrl.dispose();
+    _loanAmtFocus.dispose();
+    _grossFocus.dispose();
+    _netFocus.dispose();
     super.dispose();
   }
 
   // ── Navigation ───────────────────────────────────────────────────────────────
 
   void _back() {
-    if (_step > 1) {
-      setState(() => _step--);
+    if (widget.editMode) {
+      if (_step > 1 && _step != 5) {
+        setState(() => _step--);
+      } else {
+        Navigator.pop(context);
+      }
     } else {
-      Navigator.pop(context);
+      if (_step > 1) {
+        setState(() => _step--);
+      } else {
+        Navigator.pop(context);
+      }
     }
   }
 
@@ -151,11 +279,29 @@ class _LoadExistingPledgeScreenState
     }
 
     final dateText = _pledgeDateCtrl.text.trim();
-    if (_parseDisplayDate(dateText) == null) {
+    final parsedDate = _parseDisplayDate(dateText);
+    if (parsedDate == null) {
       setState(() => _pledgeDateError = true);
       _showError('Enter a valid pledge date (DD/MM/YYYY).');
       return;
     }
+
+    // Pledge date must be strictly before the app start date.
+    final appStart = _appStartDate != null
+        ? DateTime.tryParse(_appStartDate!)
+        : null;
+    if (appStart != null && !parsedDate.isBefore(appStart)) {
+      setState(() => _pledgeDateError = true);
+      final d = '${appStart.day.toString().padLeft(2, '0')}/'
+          '${appStart.month.toString().padLeft(2, '0')}/${appStart.year}';
+      _showError(
+        'Pledge date must be before $d. Loans created on or after this date '
+        'should be added via New Loan, or via Cash Book\'s backdated entry '
+        'options if a specific day was missed.',
+      );
+      return;
+    }
+
     setState(() => _pledgeDateError = false);
 
     if (_loanAmount <= 0) {
@@ -176,13 +322,23 @@ class _LoadExistingPledgeScreenState
       return;
     }
 
-    // Duplicate pledge number check
-    await _checkPledgeNo();
-    if (!mounted) return;
-    if (_pledgeNoError) {
-      _showError(
-          'Pledge number $no already exists. Please use a different number.');
-      return;
+    // Duplicate pledge number check.
+    // For normal creation: always check.
+    // For migrated-pledge edit: check only when the number was changed
+    //   (unchanged number references itself — not a conflict).
+    // For new-loan edit: skip (field is locked, number can't change).
+    final isMigratedEdit =
+        widget.editMode && widget.existingPledge?.source == 'migrated';
+    if (!widget.editMode ||
+        (isMigratedEdit &&
+            no != (widget.existingPledge?.pledgeNumber ?? ''))) {
+      await _checkPledgeNo();
+      if (!mounted) return;
+      if (_pledgeNoError) {
+        _showError(
+            'Pledge number $no already exists. Please use a different number.');
+        return;
+      }
     }
 
     setState(() => _step = 2);
@@ -249,59 +405,49 @@ class _LoadExistingPledgeScreenState
 
   // ── Save (migrate) pledge ────────────────────────────────────────────────────
 
-  Future<void> _savePledge() async {
+  /// Builds and persists the migrated (open) pledge. Returns its new id, or
+  /// null on failure. Leaves [_isSaving] true on success so the caller can
+  /// chain navigation; resets it on error.
+  Future<int?> _persistPledge() async {
     setState(() => _isSaving = true);
     try {
       final now = DateTime.now();
-      final db = await AppDatabase.instance.database;
 
-      // ── Customer upsert ──────────────────────────────────────────────────────
+      // ── Customer ───────────────────────────────────────────────────────────────
       final customerData = _capturedCustomer;
       int? customerId = customerData?.existingCustomerId;
       final name = customerData?.name ?? '';
 
-      if (name.isNotEmpty) {
-        final photoPathsJson = jsonEncode(
-            (customerData?.idProofPhotos ?? []).map((f) => f.path).toList());
+      if (name.isNotEmpty && customerData != null) {
         if (customerId != null) {
-          await db.update(
-            'customers',
-            {
-              'name': name,
-              'phone': customerData?.phone ?? '',
-              'address': customerData?.address ?? '',
-              'district': customerData?.district,
-              'state': customerData?.state,
-              'pin_code': customerData?.pinCode,
-              'id_proof_type': customerData?.idProofType ?? 'Aadhaar Card',
-              'id_proof_number': customerData?.idNumber ?? '',
-              'id_proof_photo_paths': photoPathsJson,
-              'updated_at': now.toIso8601String(),
-            },
-            where: 'id = ?',
-            whereArgs: [customerId],
-          );
+          await CustomerRepository.instance
+              .updateCustomer(customerId, customerData);
         } else {
-          customerId = await db.insert('customers', {
-            'name': name,
-            'phone': customerData?.phone ?? '',
-            'address': customerData?.address ?? '',
-            'district': customerData?.district,
-            'state': customerData?.state,
-            'pin_code': customerData?.pinCode,
-            'id_proof_type': customerData?.idProofType ?? 'Aadhaar Card',
-            'id_proof_number': customerData?.idNumber ?? '',
-            'id_proof_photo_paths': photoPathsJson,
-            'created_at': now.toIso8601String(),
-            'updated_at': now.toIso8601String(),
-          });
+          customerId =
+              await CustomerRepository.instance.upsertCustomer(customerData);
         }
       }
 
-      // ── Build pledge items ───────────────────────────────────────────────────
+      // ── Customer snapshot (denormalised onto the pledge) ───────────────────────
+      final customerSnapshot = customerData != null && name.isNotEmpty
+          ? <String, dynamic>{
+              'name': customerData.name,
+              'phone': customerData.phone,
+              'address': customerData.address,
+              'district': customerData.district,
+              'state': customerData.state,
+              'pin_code': customerData.pinCode,
+              'id_proof_type': customerData.idProofType,
+              'id_proof_number': customerData.idNumber,
+            }
+          : null;
+
+      // ── Gold photos (item photos, if any) ──────────────────────────────────────
       final itemData = _capturedItems;
-      final itemPhotoPathsList =
+      final goldPhotoPaths =
           (itemData?.photos ?? []).map((f) => f.path).toList();
+
+      // ── Build pledge items ───────────────────────────────────────────────────
       List<PledgeItemModel> pledgeItems = (itemData?.items ?? [])
           .where((e) => e.grossWeight > 0 || e.netWeight > 0)
           .map((e) => PledgeItemModel(
@@ -309,9 +455,9 @@ class _LoadExistingPledgeScreenState
                 itemType: e.itemType,
                 grossWeight: e.grossWeight,
                 netWeight: e.netWeight,
+                quantity: e.quantity,
                 purity: e.purity ?? '',
                 notes: e.notes,
-                photoPaths: itemPhotoPathsList,
                 createdAt: now.toIso8601String(),
               ))
           .toList();
@@ -319,7 +465,7 @@ class _LoadExistingPledgeScreenState
       if (pledgeItems.isEmpty) {
         pledgeItems.add(PledgeItemModel(
           pledgeId: 0,
-          itemType: 'other',
+          itemType: 'Other',
           grossWeight: _grossWeight,
           netWeight: _netWeight,
           createdAt: now.toIso8601String(),
@@ -337,32 +483,20 @@ class _LoadExistingPledgeScreenState
         formPhotoPaths: _formPhotos.isNotEmpty
             ? _formPhotos.map((f) => f.path).toList()
             : null,
+        goldPhotoPaths: goldPhotoPaths.isEmpty ? null : goldPhotoPaths,
         createdAt: now.toIso8601String(),
-        customerName: name,
         customerId: customerId,
-        customerPhone: (customerData?.phone ?? '').isEmpty
-            ? null
-            : customerData?.phone,
-        customerAddress: (customerData?.address ?? '').isEmpty
-            ? null
-            : customerData?.address,
+        customerSnapshot: customerSnapshot,
         grossWeight: _grossWeight,
         netWeight: _netWeight,
-        purity: '22K',
         goldRate: 0,
         pledgeRate: 0,
         actualItemValue: 0,
       );
 
-      await PledgeRepository.instance.createMigratedPledge(pledge, pledgeItems);
-
-      if (mounted) {
-        setState(() {
-          _savedPledgeNo = _pledgeNoCtrl.text.trim();
-          _savedAmount = _loanAmount;
-          _isSaving = false;
-        });
-      }
+      final newId = await PledgeRepository.instance
+          .createMigratedPledge(pledge, pledgeItems);
+      return newId;
     } catch (e) {
       if (mounted) {
         setState(() => _isSaving = false);
@@ -372,14 +506,62 @@ class _LoadExistingPledgeScreenState
               backgroundColor: Colors.red),
         );
       }
+      return null;
     }
+  }
+
+  /// Normal flow: save and show the success screen.
+  Future<void> _savePledge() async {
+    final id = await _persistPledge();
+    if (id == null || !mounted) return;
+    setState(() {
+      _savedPledgeNo = _pledgeNoCtrl.text.trim();
+      _savedAmount = _loanAmount;
+      _isSaving = false;
+    });
+  }
+
+  /// MIGRATE & CLOSE: save as open, then go straight to the Close Pledge screen
+  /// with the close date as a non-editable context date.
+  Future<void> _migrateAndClose() async {
+    final id = await _persistPledge();
+    if (id == null || !mounted) return;
+    final pledge = await PledgeRepository.instance.getPledgeById(id);
+    if (pledge == null || !mounted) return;
+    setState(() => _isSaving = false);
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ClosePledgeScreen(
+            pledge: pledge, contextDate: widget.closeDate),
+      ),
+    );
+    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
+  /// MIGRATE & RENEW: save as open, then go to the Renew Selection screen with
+  /// the close date as a non-editable context date.
+  Future<void> _migrateAndRenew() async {
+    final id = await _persistPledge();
+    if (id == null || !mounted) return;
+    final pledge = await PledgeRepository.instance.getPledgeById(id);
+    if (pledge == null || !mounted) return;
+    setState(() => _isSaving = false);
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RenewSelectionScreen(
+            pledge: pledge, contextDate: widget.closeDate),
+      ),
+    );
+    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   void _reset() {
     setState(() {
       _step = 1;
       _pledgeNoCtrl.clear();
-      _pledgeDateCtrl.text = _todayDisplay();
+      _pledgeDateCtrl.text = '';
       _loanAmtCtrl.clear();
       _grossWeightCtrl.clear();
       _netWeightCtrl.clear();
@@ -417,28 +599,46 @@ class _LoadExistingPledgeScreenState
   @override
   Widget build(BuildContext context) {
     if (_savedPledgeNo != null) {
+      if (widget.editMode) {
+        return _EditSuccessScreen(pledgeNo: _savedPledgeNo!);
+      }
       return _SuccessScreen(
         pledgeNo: _savedPledgeNo!,
         amount: _savedAmount ?? 0,
         onAddAnother: _reset,
       );
     }
+    final appBarTitle = widget.editMode
+        ? 'Edit Pledge #${widget.existingPledge?.pledgeNumber ?? ''}'
+        : 'Add Existing Loan';
     return PopScope(
-      canPop: _step == 1,
+      canPop: widget.editMode ? _step == 5 : _step == 1,
       onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (!didPop) setState(() => _step--);
+        if (!didPop) {
+          if (widget.editMode) {
+            if (_step > 1 && _step != 5) setState(() => _step--);
+          } else {
+            setState(() => _step--);
+          }
+        }
       },
       child: Scaffold(
         backgroundColor: FlowColors.bg,
         appBar: AppBar(
           backgroundColor: FlowColors.primary,
           foregroundColor: FlowColors.goldRich,
-          title: const Text('Load Existing Pledge'),
+          title: Text(appBarTitle),
           leading: BackButton(onPressed: _back),
         ),
         body: Column(
           children: [
             _LEPStepIndicator(currentStep: _step),
+            if (widget.closeDate != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: ContextDateBanner(
+                    label: 'Close Date', date: widget.closeDate!),
+              ),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
@@ -460,6 +660,14 @@ class _LoadExistingPledgeScreenState
   // ─── Step 1: Pledge Details ──────────────────────────────────────────────────
 
   Widget _buildStep1() {
+    // Migrated pledges in edit mode: pledge number and date are fully editable
+    // (staff-entered historical facts that may need correction).
+    // New Loan pledges in edit mode: pledge number stays locked (system-sequenced).
+    final isMigratedEdit =
+        widget.editMode && widget.existingPledge?.source == 'migrated';
+    final readOnly = widget.editMode && !isMigratedEdit;
+    final dateReadOnly =
+        !widget.openDateEditable || (widget.editMode && !isMigratedEdit);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -468,28 +676,37 @@ class _LoadExistingPledgeScreenState
           padding: const EdgeInsets.only(bottom: 4),
           child: TextField(
             controller: _pledgeNoCtrl,
+            readOnly: readOnly,
             keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            inputFormatters: readOnly
+                ? []
+                : [FilteringTextInputFormatter.digitsOnly],
             style: const TextStyle(fontSize: 18),
             decoration: InputDecoration(
               labelText: 'Pledge Number',
-              prefixIcon: const Icon(Icons.tag),
+              prefixIcon: Icon(readOnly ? Icons.lock : Icons.tag),
               errorText: _pledgeNoError
                   ? 'This pledge number already exists'
                   : null,
             ),
-            textInputAction: TextInputAction.done,
-            onChanged: (_) => setState(() => _pledgeNoError = false),
-            onEditingComplete: () {
-              FocusScope.of(context).unfocus();
-              _checkPledgeNo();
-            },
+            textInputAction: TextInputAction.next,
+            onChanged: readOnly
+                ? null
+                : (_) => setState(() => _pledgeNoError = false),
+            onEditingComplete: readOnly ? null : _checkPledgeNo,
+            onSubmitted: readOnly
+                ? null
+                : (_) => FocusScope.of(context).nextFocus(),
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.only(bottom: 20),
-          child: Text('Enter the exact number from the original pledge form.',
-              style: TextStyle(color: Colors.black54, fontSize: 13)),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Text(
+            readOnly
+                ? 'Pledge number cannot be changed.'
+                : 'Enter the exact number from the original pledge form.',
+            style: const TextStyle(color: Colors.black54, fontSize: 13),
+          ),
         ),
         const _SecHeader('Pledge Date'),
         Row(
@@ -500,53 +717,84 @@ class _LoadExistingPledgeScreenState
                 padding: const EdgeInsets.only(bottom: 4),
                 child: TextField(
                   controller: _pledgeDateCtrl,
+                  readOnly: dateReadOnly,
                   keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.next,
                   inputFormatters: [_DateFormatter()],
                   style: const TextStyle(fontSize: 18),
                   decoration: InputDecoration(
                     labelText: 'Pledge Date (DD/MM/YYYY)',
-                    prefixIcon: const Icon(Icons.calendar_today),
+                    prefixIcon: Icon(dateReadOnly
+                        ? Icons.lock
+                        : Icons.calendar_today),
                     errorText:
                         _pledgeDateError ? 'Enter a valid date' : null,
                   ),
                   onChanged: (_) =>
                       setState(() => _pledgeDateError = false),
+                  onSubmitted: (_) => _loanAmtFocus.requestFocus(),
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: IconButton(
-                icon: const Icon(Icons.date_range,
-                    color: FlowColors.primary, size: 28),
-                tooltip: 'Pick date',
-                onPressed: () async {
-                  final dt = _parseDisplayDate(
-                      _pledgeDateCtrl.text.trim());
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: dt ?? DateTime.now(),
-                    firstDate: DateTime(1990),
-                    lastDate: DateTime.now(),
-                  );
-                  if (picked != null && mounted) {
-                    _pledgeDateCtrl.text =
-                        '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
-                    setState(() => _pledgeDateError = false);
-                  }
-                },
+            if (widget.openDateEditable) ...[
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: IconButton(
+                  icon: const Icon(Icons.date_range,
+                      color: FlowColors.primary, size: 28),
+                  tooltip: 'Pick date',
+                  onPressed: () async {
+                    final dt = _parseDisplayDate(
+                        _pledgeDateCtrl.text.trim());
+                    // lastDate is the day before app_use_start_date so the
+                    // picker only allows strictly-before dates.
+                    final DateTime pickerLastDate;
+                    if (_appStartDate != null) {
+                      final start = DateTime.parse(_appStartDate!);
+                      pickerLastDate = start.subtract(const Duration(days: 1));
+                    } else {
+                      pickerLastDate = DateTime.now();
+                    }
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: (dt != null && dt.isBefore(pickerLastDate))
+                          ? dt
+                          : pickerLastDate,
+                      firstDate: DateTime(1990),
+                      lastDate: pickerLastDate,
+                    );
+                    if (picked != null && mounted) {
+                      _pledgeDateCtrl.text =
+                          '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
+                      setState(() => _pledgeDateError = false);
+                      // After picking a date, jump to Loan Amount (not Pledge
+                      // ID) and open the keyboard.
+                      _loanAmtFocus.requestFocus();
+                    }
+                  },
+                ),
               ),
-            ),
+            ],
           ],
         ),
         const SizedBox(height: 16),
         const _SecHeader('Loan Amount'),
         _numberField('Loan Amount (₹)', _loanAmtCtrl,
-            prefixText: '₹ ', indianFormat: true),
+            prefixText: '₹ ',
+            indianFormat: true,
+            focusNode: _loanAmtFocus,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => _grossFocus.requestFocus()),
         const _SecHeader('Gold Weights'),
-        _decimalField('Gross Weight (grams)', _grossWeightCtrl),
-        _decimalField('Net Weight (grams)', _netWeightCtrl),
+        _decimalField('Gross Weight (grams)', _grossWeightCtrl,
+            focusNode: _grossFocus,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => _netFocus.requestFocus()),
+        _decimalField('Net Weight (grams)', _netWeightCtrl,
+            focusNode: _netFocus,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => FocusScope.of(context).unfocus()),
         const SizedBox(height: 8),
         _proceedBtn(_proceedFromStep1),
       ],
@@ -786,6 +1034,8 @@ class _LoadExistingPledgeScreenState
   // ─── Step 5: Review & Confirm ────────────────────────────────────────────────
 
   Widget _buildStep5() {
+    if (widget.editMode) return _buildEditStep5();
+
     final customer = _capturedCustomer;
     final itemData = _capturedItems;
 
@@ -856,12 +1106,15 @@ class _LoadExistingPledgeScreenState
                           const Divider(height: 16, thickness: 0.8),
                         Text('Item ${i + 1}: ${it.itemType}',
                             style: const TextStyle(
-                                fontSize: 15,
+                                fontSize: 17,
                                 fontWeight: FontWeight.w600)),
+                        _summaryRow('  Quantity', '${it.quantity}'),
                         _summaryRow('  Gross',
                             '${it.grossWeight.toStringAsFixed(2)} g'),
                         _summaryRow('  Net',
                             '${it.netWeight.toStringAsFixed(2)} g'),
+                        if (it.purity != null && it.purity!.isNotEmpty)
+                          _summaryRow('  Purity', it.purity!),
                         if (it.notes != null && it.notes!.isNotEmpty)
                           _summaryRow('  Notes', it.notes!),
                       ],
@@ -898,26 +1151,190 @@ class _LoadExistingPledgeScreenState
         ),
 
         const SizedBox(height: 24),
+        ..._buildStep5Actions(),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  // ─── Edit Step 5 ─────────────────────────────────────────────────────────────
+
+  Widget _buildEditStep5() {
+    final p = widget.existingPledge!;
+    final customer = _capturedCustomer;
+    final itemData = _capturedItems;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Edit mode banner
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          margin: const EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+            color: CMBColors.warningOrange.withValues(alpha: 0.12),
+            border: Border.all(color: CMBColors.warningOrange, width: 1.5),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.edit_note,
+                  color: CMBColors.warningOrange, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                'Editing Pledge #${p.pledgeNumber}',
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: CMBColors.warningOrange),
+              ),
+            ],
+          ),
+        ),
+
+        // Read-only edit reason
+        _summarySection(
+          title: 'EDIT REASON',
+          onEdit: () {},
+          hideEditButton: true,
+          children: [
+            Text(widget.editReason ?? '',
+                style: const TextStyle(
+                    fontSize: 15, color: FlowColors.darkText)),
+          ],
+        ),
+
+        // Pledge Details (no edit button for pledge no & date)
+        _summarySection(
+          title: 'PLEDGE DETAILS',
+          onEdit: () => setState(() => _step = 1),
+          children: [
+            _summaryRow('Pledge No.', '#${p.pledgeNumber}',
+                highlight: true),
+            _summaryRow('Date', _pledgeDateCtrl.text),
+            _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
+            _summaryRow(
+                'Gross Weight', '${_grossWeight.toStringAsFixed(2)} g'),
+            _summaryRow(
+                'Net Weight', '${_netWeight.toStringAsFixed(2)} g'),
+          ],
+        ),
+
+        // Customer
+        _summarySection(
+          title: 'CUSTOMER',
+          onEdit: () => setState(() => _step = 2),
+          children: customer != null && customer.name.isNotEmpty
+              ? [
+                  if (customer.phone.isNotEmpty)
+                    _summaryRow('Phone', customer.phone),
+                  _summaryRow('Name', customer.name),
+                  if (customer.address.isNotEmpty ||
+                      (customer.district?.isNotEmpty ?? false))
+                    _summaryRow(
+                      'Address',
+                      formatCustomerAddress(
+                        address: customer.address.isNotEmpty
+                            ? customer.address
+                            : null,
+                        district: customer.district,
+                        state: customer.state,
+                        pinCode: customer.pinCode,
+                      ),
+                    ),
+                  if (customer.idNumber.isNotEmpty)
+                    _summaryRow(customer.idProofType, customer.idNumber),
+                ]
+              : [
+                  const Text('No customer details entered.',
+                      style: TextStyle(
+                          color: Colors.black45, fontSize: 15)),
+                ],
+        ),
+
+        // Items
+        _summarySection(
+          title: 'ITEMS',
+          onEdit: () => setState(() => _step = 3),
+          children: itemData != null && itemData.items.isNotEmpty
+              ? [
+                  ...List.generate(itemData.items.length, (i) {
+                    final it = itemData.items[i];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (i > 0)
+                          const Divider(height: 16, thickness: 0.8),
+                        Text('Item ${i + 1}: ${it.itemType}',
+                            style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600)),
+                        _summaryRow('  Quantity', '${it.quantity}'),
+                        _summaryRow('  Gross',
+                            '${it.grossWeight.toStringAsFixed(2)} g'),
+                        _summaryRow('  Net',
+                            '${it.netWeight.toStringAsFixed(2)} g'),
+                        if (it.purity != null && it.purity!.isNotEmpty)
+                          _summaryRow('  Purity', it.purity!),
+                        if (it.notes != null && it.notes!.isNotEmpty)
+                          _summaryRow('  Notes', it.notes!),
+                      ],
+                    );
+                  }),
+                  if (itemData.photos.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                          '${itemData.photos.length} item photo(s) attached.',
+                          style: const TextStyle(
+                              color: Colors.black54, fontSize: 14)),
+                    ),
+                ]
+              : [
+                  const Text('No items detailed.',
+                      style: TextStyle(
+                          color: Colors.black45, fontSize: 15)),
+                ],
+        ),
+
+        // Form Scan
+        _summarySection(
+          title: 'FORM SCAN',
+          onEdit: () => setState(() => _step = 4),
+          children: _formPhotos.isNotEmpty
+              ? [
+                  Text('${_formPhotos.length} page(s) scanned.',
+                      style: const TextStyle(fontSize: 15)),
+                ]
+              : [
+                  const Text('No form photos attached.',
+                      style: TextStyle(
+                          color: Colors.black45, fontSize: 15)),
+                ],
+        ),
+
+        const SizedBox(height: 24),
         SizedBox(
           width: double.infinity,
           height: 64,
           child: ElevatedButton.icon(
-            onPressed: _isSaving ? null : _savePledge,
+            onPressed: _isSaving ? null : _updateMigratedPledge,
             icon: _isSaving
                 ? const SizedBox(
                     width: 22,
                     height: 22,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2.5, color: FlowColors.textOnNavyLarge))
-                : const Icon(Icons.save_alt, size: 24),
+                        strokeWidth: 2.5,
+                        color: FlowColors.textOnNavyLarge))
+                : const Icon(Icons.save, size: 24),
             label: Text(
-                _isSaving ? 'SAVING…' : 'SAVE MIGRATED PLEDGE',
+                _isSaving ? 'SAVING…' : 'SAVE CHANGES',
                 style: const TextStyle(
                     fontSize: 18, fontWeight: FontWeight.w600)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: FlowColors.primary,
-              foregroundColor: FlowColors.textOnNavyLarge,
-              side: const BorderSide(color: FlowColors.borderOnNavy, width: 0.8),
+              backgroundColor: CMBColors.warningOrange,
+              foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
             ),
@@ -928,12 +1345,258 @@ class _LoadExistingPledgeScreenState
     );
   }
 
+  Future<void> _updateMigratedPledge() async {
+    final existingPledge = widget.existingPledge!;
+    if (_loanAmount <= 0) {
+      _showError('Loan amount is invalid.');
+      return;
+    }
+
+    // Validate pledge date if it was changed.
+    final newDateIso = _toIsoDate(_pledgeDateCtrl.text.trim());
+    final newParsed = _parseDisplayDate(_pledgeDateCtrl.text.trim());
+    final appStart = _appStartDate != null
+        ? DateTime.tryParse(_appStartDate!)
+        : null;
+    if (newParsed != null && appStart != null && !newParsed.isBefore(appStart)) {
+      final d = '${appStart.day.toString().padLeft(2, '0')}/'
+          '${appStart.month.toString().padLeft(2, '0')}/${appStart.year}';
+      _showError(
+        'Pledge date must be before $d. Loans created on or after this date '
+        'should be added via New Loan, or via Cash Book\'s backdated entry '
+        'options if a specific day was missed.',
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final now = DateTime.now();
+
+      // Customer upsert
+      final customerData = _capturedCustomer;
+      int? customerId = customerData?.existingCustomerId;
+      final name = customerData?.name ?? '';
+      if (name.isNotEmpty && customerData != null) {
+        if (customerId != null) {
+          await CustomerRepository.instance
+              .updateCustomer(customerId, customerData);
+        } else {
+          customerId =
+              await CustomerRepository.instance.upsertCustomer(customerData);
+        }
+      }
+
+      final customerSnapshot = customerData != null && name.isNotEmpty
+          ? <String, dynamic>{
+              'name': customerData.name,
+              'phone': customerData.phone,
+              'address': customerData.address,
+              'district': customerData.district,
+              'state': customerData.state,
+              'pin_code': customerData.pinCode,
+              'id_proof_type': customerData.idProofType,
+              'id_proof_number': customerData.idNumber,
+            }
+          : existingPledge.customerSnapshot;
+
+      final itemData = _capturedItems;
+      final goldPhotoPaths =
+          (itemData?.photos ?? []).map((f) => f.path).toList();
+      final formPhotoPaths = _formPhotos.map((f) => f.path).toList();
+
+      List<PledgeItemModel> pledgeItems = (itemData?.items ?? [])
+          .where((e) => e.grossWeight > 0 || e.netWeight > 0)
+          .map((e) => PledgeItemModel(
+                pledgeId: existingPledge.id!,
+                itemType: e.itemType,
+                grossWeight: e.grossWeight,
+                netWeight: e.netWeight,
+                quantity: e.quantity,
+                purity: e.purity ?? '',
+                notes: e.notes,
+                createdAt: now.toIso8601String(),
+              ))
+          .toList();
+
+      if (pledgeItems.isEmpty) {
+        pledgeItems.add(PledgeItemModel(
+          pledgeId: existingPledge.id!,
+          itemType: 'Other',
+          grossWeight: _grossWeight,
+          netWeight: _netWeight,
+          createdAt: now.toIso8601String(),
+        ));
+      }
+
+      final updatedPledge = PledgeModel(
+        id: existingPledge.id,
+        pledgeNumber: _pledgeNoCtrl.text.trim(),
+        pledgeDate: newDateIso,
+        loanAmount: _loanAmount,
+        interestRate: existingPledge.interestRate,
+        status: existingPledge.status,
+        source: existingPledge.source,
+        createdAt: existingPledge.createdAt,
+        customerId: customerId ?? existingPledge.customerId,
+        customerSnapshot: customerSnapshot,
+        goldPhotoPaths: goldPhotoPaths.isEmpty ? null : goldPhotoPaths,
+        formPhotoPaths: formPhotoPaths.isEmpty ? null : formPhotoPaths,
+        grossWeight: _grossWeight,
+        netWeight: _netWeight,
+        goldRate: existingPledge.goldRate,
+        pledgeRate: existingPledge.pledgeRate,
+        actualItemValue: existingPledge.actualItemValue,
+        renewalParentId: existingPledge.renewalParentId,
+        renewType: existingPledge.renewType,
+        renewSubtype: existingPledge.renewSubtype,
+        closureDate: existingPledge.closureDate,
+        closedAt: existingPledge.closedAt,
+        totalInterestPaid: existingPledge.totalInterestPaid,
+        totalAmountCollected: existingPledge.totalAmountCollected,
+      );
+
+      final oldJson = jsonEncode({
+        'pledge_no': existingPledge.pledgeNumber,
+        'pledge_date': existingPledge.pledgeDate,
+        'gross_weight': existingPledge.grossWeight,
+        'net_weight': existingPledge.netWeight,
+        'principal_amount': existingPledge.loanAmount,
+        'customer_id': existingPledge.customerId,
+        'form_photo_paths': existingPledge.formPhotoPaths,
+        'gold_photo_paths': existingPledge.goldPhotoPaths,
+      });
+      final newJson = jsonEncode({
+        'pledge_no': _pledgeNoCtrl.text.trim(),
+        'pledge_date': newDateIso,
+        'gross_weight': _grossWeight,
+        'net_weight': _netWeight,
+        'principal_amount': _loanAmount,
+        'customer_id': customerId ?? existingPledge.customerId,
+        'form_photo_paths': formPhotoPaths,
+        'gold_photo_paths': goldPhotoPaths,
+      });
+
+      await PledgeRepository.instance.editPledge(
+        pledgeId: existingPledge.id!,
+        updatedPledge: updatedPledge,
+        updatedItems: pledgeItems,
+        newGoldPhotoPaths: goldPhotoPaths,
+        newFormPhotoPaths: formPhotoPaths,
+        originalPrincipal: existingPledge.loanAmount,
+        editReason: widget.editReason ?? '',
+        oldValueJson: oldJson,
+        newValueJson: newJson,
+        // Migrated pledges fall before app_use_start_date — no daily_stock
+        // rows exist for those dates so gold stock cascade is a guaranteed
+        // no-op and is explicitly skipped here for clarity.
+        cascadeGoldStock: false,
+      );
+
+      if (mounted) {
+        setState(() {
+          _savedPledgeNo = existingPledge.pledgeNumber;
+          _savedAmount = _loanAmount;
+          _isSaving = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Error saving changes: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // ─── Step 5 action buttons (context dependent) ────────────────────────────────
+
+  List<Widget> _buildStep5Actions() {
+    final spinner = const SizedBox(
+        width: 22,
+        height: 22,
+        child: CircularProgressIndicator(
+            strokeWidth: 2.5, color: FlowColors.textOnNavyLarge));
+
+    final migrateFlow = widget.sourceContext == 'calculator' ||
+        widget.sourceContext == 'daily_accounts';
+
+    if (!migrateFlow) {
+      return [
+        SizedBox(
+          width: double.infinity,
+          height: 64,
+          child: ElevatedButton.icon(
+            onPressed: _isSaving ? null : _savePledge,
+            icon: _isSaving ? spinner : const Icon(Icons.save_alt, size: 24),
+            label: Text(_isSaving ? 'SAVING…' : 'SAVE MIGRATED PLEDGE',
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w600)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: FlowColors.primary,
+              foregroundColor: FlowColors.textOnNavyLarge,
+              side:
+                  const BorderSide(color: FlowColors.borderOnNavy, width: 0.8),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    return [
+      SizedBox(
+        width: double.infinity,
+        height: 64,
+        child: ElevatedButton.icon(
+          onPressed: _isSaving ? null : _migrateAndClose,
+          icon: _isSaving ? spinner : const Icon(Icons.lock, size: 24),
+          label: Text(_isSaving ? 'SAVING…' : 'MIGRATE & CLOSE',
+              style: const TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: FlowColors.primary,
+            foregroundColor: FlowColors.textOnNavyLarge,
+            side:
+                const BorderSide(color: FlowColors.borderOnNavy, width: 0.8),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        height: 64,
+        child: OutlinedButton.icon(
+          onPressed: _isSaving ? null : _migrateAndRenew,
+          icon: const Icon(Icons.autorenew, size: 24, color: FlowColors.primary),
+          label: const Text('MIGRATE & RENEW',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: FlowColors.primary)),
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: FlowColors.primary, width: 1.5),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
+    ];
+  }
+
   // ─── Summary helpers ──────────────────────────────────────────────────────────
 
   Widget _summarySection({
     required String title,
     required VoidCallback onEdit,
     required List<Widget> children,
+    bool hideEditButton = false,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -966,21 +1629,22 @@ class _LoadExistingPledgeScreenState
                         fontWeight: FontWeight.w600,
                         color: FlowColors.textOnNavyLarge,
                         letterSpacing: 0.5)),
-                GestureDetector(
-                  onTap: onEdit,
-                  child: const Row(
-                    children: [
-                      Icon(Icons.edit_note,
-                          size: 16, color: FlowColors.textOnNavyLarge),
-                      SizedBox(width: 4),
-                      Text('EDIT',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: FlowColors.textOnNavyLarge)),
-                    ],
+                if (!hideEditButton)
+                  GestureDetector(
+                    onTap: onEdit,
+                    child: const Row(
+                      children: [
+                        Icon(Icons.edit_note,
+                            size: 16, color: FlowColors.textOnNavyLarge),
+                        SizedBox(width: 4),
+                        Text('EDIT',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: FlowColors.textOnNavyLarge)),
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -998,22 +1662,22 @@ class _LoadExistingPledgeScreenState
   Widget _summaryRow(String label, String value,
       {bool highlight = false}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 126,
+            width: 150,
             child: Text(label,
                 style: const TextStyle(
-                    fontSize: 14,
-                    color: Colors.black54,
+                    fontSize: 17,
+                    color: FlowColors.medText,
                     fontWeight: FontWeight.w500)),
           ),
           Expanded(
             child: Text(value,
                 style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 18,
                     fontWeight:
                         highlight ? FontWeight.bold : FontWeight.w600,
                     color: highlight
@@ -1027,11 +1691,20 @@ class _LoadExistingPledgeScreenState
 
   // ─── Field helpers ────────────────────────────────────────────────────────────
 
-  Widget _decimalField(String label, TextEditingController ctrl) {
+  Widget _decimalField(
+    String label,
+    TextEditingController ctrl, {
+    FocusNode? focusNode,
+    TextInputAction? textInputAction,
+    ValueChanged<String>? onSubmitted,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: TextField(
         controller: ctrl,
+        focusNode: focusNode,
+        textInputAction: textInputAction,
+        onSubmitted: onSubmitted,
         keyboardType:
             const TextInputType.numberWithOptions(decimal: true),
         inputFormatters: [
@@ -1048,11 +1721,17 @@ class _LoadExistingPledgeScreenState
     TextEditingController ctrl, {
     String? prefixText,
     bool indianFormat = false,
+    FocusNode? focusNode,
+    TextInputAction? textInputAction,
+    ValueChanged<String>? onSubmitted,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: TextField(
         controller: ctrl,
+        focusNode: focusNode,
+        textInputAction: textInputAction,
+        onSubmitted: onSubmitted,
         keyboardType: TextInputType.number,
         inputFormatters: indianFormat
             ? [IndianNumberFormatter()]
@@ -1261,17 +1940,38 @@ class _SuccessScreen extends StatelessWidget {
                       fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
               Container(
-                padding: const EdgeInsets.all(16),
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(vertical: 22, horizontal: 18),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: FlowColors.greenLight),
+                  color: FlowColors.primary,
+                  borderRadius: BorderRadius.circular(16),
+                  border: const Border.fromBorderSide(BorderSide(
+                      color: FlowColors.borderOnNavy, width: 0.8)),
                 ),
                 child: Column(
                   children: [
-                    _row('Pledge Number', '#$pledgeNo'),
-                    const SizedBox(height: 6),
-                    _row('Loan Amount', money(amount)),
+                    const Text('Pledge Number',
+                        style: TextStyle(
+                            fontSize: 16,
+                            color: FlowColors.textOnNavyMuted)),
+                    const SizedBox(height: 4),
+                    Text('#$pledgeNo',
+                        style: const TextStyle(
+                            fontSize: 40,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.goldRich)),
+                    const SizedBox(height: 18),
+                    const Text('Amount Disbursed',
+                        style: TextStyle(
+                            fontSize: 16,
+                            color: FlowColors.textOnNavyMuted)),
+                    const SizedBox(height: 4),
+                    Text(money(amount),
+                        style: const TextStyle(
+                            fontSize: 34,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.goldRich)),
                   ],
                 ),
               ),
@@ -1316,17 +2016,85 @@ class _SuccessScreen extends StatelessWidget {
     );
   }
 
-  Widget _row(String label, String value) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label,
-            style:
-                const TextStyle(fontSize: 16, color: Colors.black54)),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 17, fontWeight: FontWeight.bold)),
-      ],
+}
+
+// ─── Edit success screen ──────────────────────────────────────────────────────
+
+class _EditSuccessScreen extends StatelessWidget {
+  const _EditSuccessScreen({required this.pledgeNo});
+  final String pledgeNo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: FlowColors.bg,
+      appBar: AppBar(
+        backgroundColor: FlowColors.primary,
+        foregroundColor: FlowColors.goldRich,
+        title: const Text('Pledge Updated'),
+        automaticallyImplyLeading: false,
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.check_circle,
+                  color: FlowColors.green, size: 80),
+              const SizedBox(height: 20),
+              const Text('Changes Saved!',
+                  style: TextStyle(
+                      fontSize: 26,
+                      color: FlowColors.green,
+                      fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(vertical: 22, horizontal: 18),
+                decoration: BoxDecoration(
+                  color: FlowColors.primary,
+                  borderRadius: BorderRadius.circular(16),
+                  border: const Border.fromBorderSide(
+                      BorderSide(color: FlowColors.borderOnNavy, width: 0.8)),
+                ),
+                child: Column(
+                  children: [
+                    const Text('Pledge Number',
+                        style: TextStyle(
+                            fontSize: 16,
+                            color: FlowColors.textOnNavyMuted)),
+                    const SizedBox(height: 4),
+                    Text('#$pledgeNo',
+                        style: const TextStyle(
+                            fontSize: 40,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.goldRich)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 28),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.check),
+                  label: const Text('DONE',
+                      style: TextStyle(fontSize: 17)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: FlowColors.primary,
+                    foregroundColor: FlowColors.textOnNavyLarge,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

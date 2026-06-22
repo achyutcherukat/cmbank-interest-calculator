@@ -5,6 +5,8 @@ import '../data/admin_repository.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_reports_screen.dart';
 import 'admin_settings_screen.dart';
+import 'audit_log_viewer_screen.dart';
+import 'edit_pledge_search_screen.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -60,7 +62,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
         foregroundColor: FlowColors.goldRich,
-        title: const Text('Admin Area',
+        title: const Text('Admin',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
       ),
       body: ListView(
@@ -119,13 +121,28 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             icon: Icons.analytics,
             label: 'Reports',
             subtitle: 'Period-wise pledge, gold & financial reports',
-            color: FlowColors.primaryLight,
+            color: FlowColors.primary,
             onTap: () {
               if (!_guard()) return;
               Navigator.push(
                 context,
                 MaterialPageRoute(
                     builder: (_) => const AdminReportsScreen()),
+              ).then((_) => _checkTimeout());
+            },
+          ),
+          const SizedBox(height: 14),
+          _navCard(
+            icon: Icons.edit_note,
+            label: 'Edit Pledge',
+            subtitle: 'Admin correction of an existing open pledge',
+            color: FlowColors.primary,
+            onTap: () {
+              if (!_guard()) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const EditPledgeSearchScreen()),
               ).then((_) => _checkTimeout());
             },
           ),
@@ -141,6 +158,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                 context,
                 MaterialPageRoute(
                     builder: (_) => const AdminSettingsScreen()),
+              ).then((_) => _checkTimeout());
+            },
+          ),
+          const SizedBox(height: 14),
+          _navCard(
+            icon: Icons.history,
+            label: 'Audit Log',
+            subtitle: 'View all logged actions & changes',
+            color: FlowColors.primary,
+            onTap: () {
+              if (!_guard()) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const AuditLogViewerScreen()),
               ).then((_) => _checkTimeout());
             },
           ),

@@ -1,13 +1,17 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../../core/database/app_database.dart';
+import '../../../app/theme.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/shared_customer_details_step.dart';
 import '../../../shared/widgets/shared_item_details_step.dart';
+import '../../customers/data/customer_repository.dart';
+import '../../gold_stock/data/gold_rates_repository.dart';
+import '../data/payment_model.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
 import '../data/pledge_repository.dart';
@@ -15,7 +19,27 @@ import '../data/pledge_repository.dart';
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 class NewPledgeScreen extends StatefulWidget {
-  const NewPledgeScreen({super.key});
+  const NewPledgeScreen({
+    super.key,
+    this.contextDate,
+    this.editMode = false,
+    this.existingPledge,
+    this.existingItems,
+    this.existingCustomerRow,
+    this.editReason,
+  });
+
+  /// Backdated pledge date. When set, the pledge start_date, loan-disbursed
+  /// payment, daily-balance and gold-stock updates all use this date, and a
+  /// navy banner is shown on step 1.
+  final DateTime? contextDate;
+
+  // ── Edit mode ────────────────────────────────────────────────────────────────
+  final bool editMode;
+  final PledgeModel? existingPledge;
+  final List<PledgeItemModel>? existingItems;
+  final Map<String, dynamic>? existingCustomerRow;
+  final String? editReason;
 
   @override
   State<NewPledgeScreen> createState() => _NewPledgeScreenState();
@@ -31,6 +55,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   final _pledgeRateCtrl = TextEditingController();
   final _pledgeNoCtrl = TextEditingController();
   final _loanAmtCtrl = TextEditingController();
+  final _netFocus = FocusNode();
+  final _loanAmtFocus = FocusNode();
   double _goldRate = 0;
   bool _pledgeNoError = false;
 
@@ -68,13 +94,106 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadDefaults();
+    if (widget.editMode) {
+      _prefillForEdit();
+    } else {
+      _loadDefaults();
+    }
     _grossWeightCtrl.addListener(() => setState(() {}));
     _netWeightCtrl.addListener(() => setState(() {}));
     _pledgeRateCtrl.addListener(() => setState(() {}));
     _loanAmtCtrl.addListener(() => setState(() {}));
     _cashCtrl.addListener(_onCashChanged);
     _upiCtrl.addListener(_onUpiChanged);
+  }
+
+  Future<void> _prefillForEdit() async {
+    final p = widget.existingPledge;
+    if (p == null) return;
+
+    _pledgeNoCtrl.text = p.pledgeNumber;
+    _grossWeightCtrl.text = p.grossWeight.toStringAsFixed(2);
+    _netWeightCtrl.text = p.netWeight.toStringAsFixed(2);
+    _pledgeRateCtrl.text = formatIndian(p.pledgeRate.round().toString());
+    _loanAmtCtrl.text = formatIndian(p.loanAmount.round().toString());
+    _goldRate = p.goldRate;
+
+    // Pre-fill customer from the customer row
+    final row = widget.existingCustomerRow;
+    if (row != null) {
+      List<File> idPhotos = [];
+      try {
+        final paths = jsonDecode(row['id_proof_photo_paths'] as String? ?? '[]') as List;
+        idPhotos = paths.map((e) => File(e as String)).toList();
+      } catch (_) {}
+      _capturedCustomer = CustomerDetailsData(
+        phone: (row['phone'] as String?) ?? '',
+        name: (row['name'] as String?) ?? '',
+        address: (row['address'] as String?) ?? '',
+        idProofType: (row['id_proof_type'] as String?) ?? 'None',
+        idNumber: (row['id_proof_number'] as String?) ?? '',
+        idProofPhotos: idPhotos,
+        existingCustomerId: row['id'] as int?,
+        pinCode: row['pin_code'] as String?,
+        district: row['district'] as String?,
+        state: row['state'] as String?,
+      );
+    }
+
+    // Pre-fill items + gold photos
+    final items = widget.existingItems ?? [];
+    final goldPhotos = (p.goldPhotoPaths ?? []).map((ph) => File(ph)).toList();
+    _capturedItems = ItemDetailsData(
+      items: items
+          .map((it) => ItemEntryData(
+                itemType: it.itemType,
+                grossWeight: it.grossWeight,
+                netWeight: it.netWeight,
+                quantity: it.quantity,
+                purity: it.purity.isNotEmpty ? it.purity : null,
+                notes: it.notes,
+              ))
+          .toList(),
+      photos: goldPhotos,
+    );
+
+    // Start on step 5 (review screen)
+    _step = 5;
+
+    // Pre-fill payment split from the existing LOAN_DISBURSED payment entry.
+    if (p.id != null) {
+      final payments =
+          await PledgeRepository.instance.getPaymentsForPledge(p.id!);
+      final disbursal = payments.firstWhere(
+        (pm) =>
+            pm.paymentType == PaymentType.loanDisbursed ||
+            pm.paymentType == PaymentType.loanIncreaseDisbursed,
+        orElse: () => PaymentModel(
+          paymentDate: p.pledgeDate,
+          paymentType: PaymentType.loanDisbursed,
+          direction: PaymentDirection.outward,
+          amount: p.loanAmount,
+          cashAmount: p.loanAmount,
+          upiAmount: 0,
+          createdAt: p.pledgeDate,
+        ),
+      );
+      if (mounted) {
+        setState(() {
+          final cash = disbursal.cashAmount;
+          final upi = disbursal.upiAmount;
+          if (upi <= 0) {
+            _paymentMode = 'cash';
+          } else if (cash <= 0) {
+            _paymentMode = 'upi';
+          } else {
+            _paymentMode = 'split';
+            _cashCtrl.text = formatIndian(cash.round().toString());
+            _upiCtrl.text = formatIndian(upi.round().toString());
+          }
+        });
+      }
+    }
   }
 
   @override
@@ -84,6 +203,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     _pledgeRateCtrl.dispose();
     _pledgeNoCtrl.dispose();
     _loanAmtCtrl.dispose();
+    _netFocus.dispose();
+    _loanAmtFocus.dispose();
     _cashCtrl.dispose();
     _upiCtrl.dispose();
     _scrollCtrl.dispose();
@@ -91,14 +212,14 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   }
 
   Future<void> _loadDefaults() async {
-    final pledgeRateStr = await _settingsRepo.getString('default_pledge_rate');
-    final goldRateStr = await _settingsRepo.getString('gold_rate');
+    if (widget.editMode) return;
+    final rates = await GoldRatesRepository.instance.getCurrentRates();
     final nextPledgeNo = await PledgeRepository.instance.nextPledgeNumber();
     if (mounted) {
       setState(() {
-        _pledgeRateCtrl.text = formatIndian(
-            (double.tryParse(pledgeRateStr ?? '0') ?? 0).round().toString());
-        _goldRate = double.tryParse(goldRateStr ?? '0') ?? 0;
+        _pledgeRateCtrl.text =
+            formatIndian((rates?.pledgeRate ?? 0).round().toString());
+        _goldRate = rates?.goldRate ?? 0;
         if (_pledgeNoCtrl.text.trim().isEmpty) {
           _pledgeNoCtrl.text = nextPledgeNo;
         }
@@ -111,9 +232,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   void _onCashChanged() {
     if (_updatingPayment || _paymentMode != 'split') return;
     _updatingPayment = true;
-    final cash = double.tryParse(_cashCtrl.text) ?? 0;
+    final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
     final rem = _loanAmount - cash;
-    if (rem >= 0) _upiCtrl.text = rem.round().toString();
+    if (rem >= 0) _upiCtrl.text = formatIndian(rem.round().toString());
     _updatingPayment = false;
     setState(() {});
   }
@@ -121,9 +242,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   void _onUpiChanged() {
     if (_updatingPayment || _paymentMode != 'split') return;
     _updatingPayment = true;
-    final upi = double.tryParse(_upiCtrl.text) ?? 0;
+    final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
     final rem = _loanAmount - upi;
-    if (rem >= 0) _cashCtrl.text = rem.round().toString();
+    if (rem >= 0) _cashCtrl.text = formatIndian(rem.round().toString());
     _updatingPayment = false;
     setState(() {});
   }
@@ -131,10 +252,19 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   // ── Navigation ───────────────────────────────────────────────────────────────
 
   void _back() {
-    if (_step > 1) {
-      setState(() => _step--);
+    if (widget.editMode) {
+      // In edit mode, step 5 is the entry point — going back from step 5 exits
+      if (_step > 1 && _step != 5) {
+        setState(() => _step--);
+      } else {
+        Navigator.pop(context);
+      }
     } else {
-      Navigator.pop(context);
+      if (_step > 1) {
+        setState(() => _step--);
+      } else {
+        Navigator.pop(context);
+      }
     }
   }
 
@@ -170,17 +300,18 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
       return;
     }
 
-    if (_pledgeNoCtrl.text.trim().isEmpty) {
-      final next = await PledgeRepository.instance.nextPledgeNumber();
-      _pledgeNoCtrl.text = next;
-    }
-
-    await _checkPledgeNo();
-    if (!mounted) return;
-    if (_pledgeNoError) {
-      _showError(
-          'Pledge number ${_pledgeNoCtrl.text.trim()} already exists. Please change it.');
-      return;
+    if (!widget.editMode) {
+      if (_pledgeNoCtrl.text.trim().isEmpty) {
+        final next = await PledgeRepository.instance.nextPledgeNumber();
+        _pledgeNoCtrl.text = next;
+      }
+      await _checkPledgeNo();
+      if (!mounted) return;
+      if (_pledgeNoError) {
+        _showError(
+            'Pledge number ${_pledgeNoCtrl.text.trim()} already exists. Please change it.');
+        return;
+      }
     }
 
     if (_loanAmtCtrl.text.trim().isEmpty) {
@@ -212,8 +343,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
       return;
     }
     if (_paymentMode == 'split') {
-      final cash = double.tryParse(_cashCtrl.text) ?? 0;
-      final upi = double.tryParse(_upiCtrl.text) ?? 0;
+      final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
+      final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
       if ((cash + upi - _loanAmount).abs() > 0.5) {
         _showError(
             'Cash + UPI (${money(cash + upi)}) must equal loan amount (${money(_loanAmount)}).');
@@ -224,59 +355,49 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     setState(() => _isSaving = true);
     try {
       final interestRateStr =
-          await _settingsRepo.getString('default_interest_rate');
+          await _settingsRepo.getString('interest_rate') ??
+              await _settingsRepo.getString('default_interest_rate');
       final interestRate = double.tryParse(interestRateStr ?? '') ?? 18.0;
       final now = DateTime.now();
-      final dateStr = now.toIso8601String().substring(0, 10);
-      final db = await AppDatabase.instance.database;
+      final dateStr = widget.contextDate != null
+          ? widget.contextDate!.toIso8601String().substring(0, 10)
+          : now.toIso8601String().substring(0, 10);
 
-      // ── Customer data ────────────────────────────────────────────────────────
+      // ── Customer ───────────────────────────────────────────────────────────────
       final customerData = _capturedCustomer;
       int? customerId = customerData?.existingCustomerId;
       final name = customerData?.name ?? '';
 
-      if (name.isNotEmpty) {
-        final photoPathsJson = jsonEncode(
-            (customerData?.idProofPhotos ?? []).map((f) => f.path).toList());
+      if (name.isNotEmpty && customerData != null) {
         if (customerId != null) {
-          await db.update(
-            'customers',
-            {
-              'name': name,
-              'phone': customerData?.phone ?? '',
-              'address': customerData?.address ?? '',
-              'district': customerData?.district,
-              'state': customerData?.state,
-              'pin_code': customerData?.pinCode,
-              'id_proof_type': customerData?.idProofType ?? 'Aadhaar Card',
-              'id_proof_number': customerData?.idNumber ?? '',
-              'id_proof_photo_paths': photoPathsJson,
-              'updated_at': now.toIso8601String(),
-            },
-            where: 'id = ?',
-            whereArgs: [customerId],
-          );
+          await CustomerRepository.instance
+              .updateCustomer(customerId, customerData);
         } else {
-          customerId = await db.insert('customers', {
-            'name': name,
-            'phone': customerData?.phone ?? '',
-            'address': customerData?.address ?? '',
-            'district': customerData?.district,
-            'state': customerData?.state,
-            'pin_code': customerData?.pinCode,
-            'id_proof_type': customerData?.idProofType ?? 'Aadhaar Card',
-            'id_proof_number': customerData?.idNumber ?? '',
-            'id_proof_photo_paths': photoPathsJson,
-            'created_at': now.toIso8601String(),
-            'updated_at': now.toIso8601String(),
-          });
+          customerId =
+              await CustomerRepository.instance.upsertCustomer(customerData);
         }
       }
 
-      // ── Build pledge items ───────────────────────────────────────────────────
+      // ── Customer snapshot (denormalised onto the pledge) ───────────────────────
+      final customerSnapshot = customerData != null && name.isNotEmpty
+          ? <String, dynamic>{
+              'name': customerData.name,
+              'phone': customerData.phone,
+              'address': customerData.address,
+              'district': customerData.district,
+              'state': customerData.state,
+              'pin_code': customerData.pinCode,
+              'id_proof_type': customerData.idProofType,
+              'id_proof_number': customerData.idNumber,
+            }
+          : null;
+
+      // ── Gold photos (now stored at pledge level) ───────────────────────────────
       final itemData = _capturedItems;
-      final itemPhotoPathsList =
+      final goldPhotoPaths =
           (itemData?.photos ?? []).map((f) => f.path).toList();
+
+      // ── Build pledge items ───────────────────────────────────────────────────
       List<PledgeItemModel> pledgeItems = (itemData?.items ?? [])
           .where((e) => e.grossWeight > 0 || e.netWeight > 0)
           .map((e) => PledgeItemModel(
@@ -284,9 +405,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                 itemType: e.itemType,
                 grossWeight: e.grossWeight,
                 netWeight: e.netWeight,
+                quantity: e.quantity,
                 purity: e.purity ?? '',
                 notes: e.notes,
-                photoPaths: itemPhotoPathsList,
                 createdAt: now.toIso8601String(),
               ))
           .toList();
@@ -294,10 +415,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
       if (pledgeItems.isEmpty) {
         pledgeItems.add(PledgeItemModel(
           pledgeId: 0,
-          itemType: 'other',
+          itemType: 'Other',
           grossWeight: _grossWeight,
           netWeight: _netWeight,
-          photoPaths: itemPhotoPathsList,
           createdAt: now.toIso8601String(),
         ));
       }
@@ -309,8 +429,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         cashAmt = 0;
         upiAmt = _loanAmount;
       } else if (_paymentMode == 'split') {
-        cashAmt = double.tryParse(_cashCtrl.text.trim()) ?? 0;
-        upiAmt = double.tryParse(_upiCtrl.text.trim()) ?? 0;
+        cashAmt = double.tryParse(_cashCtrl.text.replaceAll(',', '').trim()) ?? 0;
+        upiAmt = double.tryParse(_upiCtrl.text.replaceAll(',', '').trim()) ?? 0;
       }
 
       // ── Save pledge ──────────────────────────────────────────────────────────
@@ -320,18 +440,13 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         loanAmount: _loanAmount,
         interestRate: interestRate,
         status: 'open',
+        source: 'new',
         createdAt: now.toIso8601String(),
-        customerName: name,
         customerId: customerId,
-        customerPhone: (customerData?.phone ?? '').isEmpty
-            ? null
-            : customerData?.phone,
-        customerAddress: (customerData?.address ?? '').isEmpty
-            ? null
-            : customerData?.address,
+        customerSnapshot: customerSnapshot,
+        goldPhotoPaths: goldPhotoPaths.isEmpty ? null : goldPhotoPaths,
         grossWeight: _grossWeight,
         netWeight: _netWeight,
-        purity: '22K',
         goldRate: _goldRate,
         pledgeRate: _pledgeRate,
         actualItemValue: _actualItemValue,
@@ -340,9 +455,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
       await PledgeRepository.instance.createPledge(
         pledge,
         pledgeItems,
-        paymentMode: _paymentMode,
         cashAmount: cashAmt,
         upiAmount: upiAmt,
+        contextDate: widget.contextDate != null ? dateStr : null,
       );
 
       if (mounted) {
@@ -388,19 +503,31 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   Widget build(BuildContext context) {
     if (_savedPledgeNo != null) {
       return _SuccessScreen(
-          pledgeNo: _savedPledgeNo!, amount: _savedAmount ?? 0);
+        pledgeNo: _savedPledgeNo!,
+        amount: _savedAmount ?? 0,
+        isEdit: widget.editMode,
+      );
     }
+    final appBarTitle = widget.editMode
+        ? 'Edit Pledge #${widget.existingPledge?.pledgeNumber ?? ''}'
+        : 'New Pledge';
     return PopScope(
-      canPop: _step == 1,
+      canPop: widget.editMode ? _step == 5 : _step == 1,
       onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (!didPop) setState(() => _step--);
+        if (!didPop) {
+          if (widget.editMode) {
+            if (_step > 1) setState(() => _step--);
+          } else {
+            setState(() => _step--);
+          }
+        }
       },
       child: Scaffold(
         backgroundColor: FlowColors.bg,
         appBar: AppBar(
           backgroundColor: FlowColors.primary,
           foregroundColor: FlowColors.goldRich,
-          title: const Text('New Pledge'),
+          title: Text(appBarTitle),
           leading: BackButton(onPressed: _back),
         ),
         body: Column(
@@ -431,11 +558,21 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (widget.contextDate != null)
+          ContextDateBanner(label: 'Pledge Date', date: widget.contextDate!),
         const _SectionHeader('Gold Details'),
-        _decimalField('Gross Weight (grams)', _grossWeightCtrl),
-        _decimalField('Net Weight (grams)', _netWeightCtrl),
+        _decimalField('Gross Weight (grams)', _grossWeightCtrl,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => _netFocus.requestFocus()),
+        _decimalField('Net Weight (grams)', _netWeightCtrl,
+            focusNode: _netFocus,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => _loanAmtFocus.requestFocus()),
         _numberField('Pledge Rate (₹/gram)', _pledgeRateCtrl,
-            suffixText: '/g', indianFormat: true),
+            suffixText: '/g',
+            indianFormat: true,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => FocusScope.of(context).nextFocus()),
         FlowCard(
           backgroundColor: FlowColors.accent,
           child: Column(
@@ -450,7 +587,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                     fontWeight: FontWeight.bold),
               ),
               Text(
-                '${_netWeight.toStringAsFixed(2)} g × ₹${_pledgeRate.round()}/g',
+                '${_netWeight.toStringAsFixed(2)} g × ${money(_pledgeRate)}/g',
                 style: const TextStyle(
                     color: FlowColors.medText, fontSize: 14),
               ),
@@ -463,6 +600,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
           child: TextField(
             controller: _pledgeNoCtrl,
             keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.next,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             style: const TextStyle(fontSize: 18),
             decoration: InputDecoration(
@@ -474,6 +612,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
             ),
             onChanged: (_) => setState(() => _pledgeNoError = false),
             onEditingComplete: _checkPledgeNo,
+            onSubmitted: (_) => FocusScope.of(context).nextFocus(),
           ),
         ),
         const Padding(
@@ -483,7 +622,11 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         ),
         const _SectionHeader('Loan Amount'),
         _numberField('Loan Amount (₹)', _loanAmtCtrl,
-            prefixText: '₹ ', indianFormat: true),
+            focusNode: _loanAmtFocus,
+            prefixText: '₹ ',
+            indianFormat: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => FocusScope.of(context).unfocus()),
         Padding(
           padding: const EdgeInsets.only(bottom: 24),
           child: Text('Max: ${money(_maxPledgeValue)}. Can be lower.',
@@ -576,8 +719,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   // ─── Step 4: Payment Mode ────────────────────────────────────────────────────
 
   Widget _buildStep4() {
-    final cash = double.tryParse(_cashCtrl.text) ?? 0;
-    final upi = double.tryParse(_upiCtrl.text) ?? 0;
+    final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
+    final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
     final splitTotal = cash + upi;
     final splitOk =
         (_paymentMode != 'split') || (splitTotal - _loanAmount).abs() < 0.5;
@@ -617,8 +760,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         _modeBtn('split', 'SPLIT  (Cash + UPI)', Icons.call_split),
         if (_paymentMode == 'split') ...[
           const SizedBox(height: 16),
-          _numberField('Cash Amount (₹)', _cashCtrl, prefixText: '₹ '),
-          _numberField('UPI Amount (₹)', _upiCtrl, prefixText: '₹ '),
+          _numberField('Cash Amount (₹)', _cashCtrl, prefixText: '₹ ', indianFormat: true),
+          _numberField('UPI Amount (₹)', _upiCtrl, prefixText: '₹ ', indianFormat: true),
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -695,19 +838,20 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   // ─── Step 5: Summary & Confirmation ─────────────────────────────────────────
 
   Widget _buildStep5() {
+    if (widget.editMode) return _buildEditStep5();
+
     final now = DateTime.now();
-    final displayDate =
-        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
+    final displayDate = formatDmy(widget.contextDate ?? now);
     final cashAmt = _paymentMode == 'cash'
         ? _loanAmount
         : _paymentMode == 'upi'
             ? 0.0
-            : double.tryParse(_cashCtrl.text) ?? 0;
+            : double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
     final upiAmt = _paymentMode == 'upi'
         ? _loanAmount
         : _paymentMode == 'cash'
             ? 0.0
-            : double.tryParse(_upiCtrl.text) ?? 0;
+            : double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
     final customer = _capturedCustomer;
     final itemData = _capturedItems;
 
@@ -728,7 +872,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                 'Gross Weight', '${_grossWeight.toStringAsFixed(2)} g'),
             _summaryRow(
                 'Net Weight', '${_netWeight.toStringAsFixed(2)} g'),
-            _summaryRow('Pledge Rate', '₹${_pledgeRate.round()}/g'),
+            _summaryRow('Pledge Rate', '${money(_pledgeRate)}/g'),
             _summaryRow('Max Pledge Value', money(_maxPledgeValue)),
             _summaryRow('Actual Item Value', money(_actualItemValue)),
             _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
@@ -782,12 +926,15 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                           const Divider(height: 16, thickness: 0.8),
                         Text('Item ${i + 1}: ${it.itemType}',
                             style: const TextStyle(
-                                fontSize: 15,
+                                fontSize: 17,
                                 fontWeight: FontWeight.w600)),
+                        _summaryRow('  Quantity', '${it.quantity}'),
                         _summaryRow('  Gross',
                             '${it.grossWeight.toStringAsFixed(2)} g'),
                         _summaryRow('  Net',
                             '${it.netWeight.toStringAsFixed(2)} g'),
+                        if (it.purity != null && it.purity!.isNotEmpty)
+                          _summaryRow('  Purity', it.purity!),
                         if (it.notes != null && it.notes!.isNotEmpty)
                           _summaryRow('  Notes', it.notes!),
                       ],
@@ -852,10 +999,378 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     );
   }
 
+  // ─── Edit Step 5: Edit review + SAVE CHANGES ─────────────────────────────────
+
+  Widget _buildEditStep5() {
+    final p = widget.existingPledge!;
+    final customer = _capturedCustomer;
+    final itemData = _capturedItems;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Edit mode banner
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          margin: const EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+            color: CMBColors.warningOrange.withValues(alpha: 0.12),
+            border: Border.all(color: CMBColors.warningOrange, width: 1.5),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.edit_note,
+                  color: CMBColors.warningOrange, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                'Editing Pledge #${p.pledgeNumber}',
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: CMBColors.warningOrange),
+              ),
+            ],
+          ),
+        ),
+
+        // Read-only edit reason
+        _summarySection(
+          title: 'EDIT REASON',
+          onEdit: () {},
+          hideEditButton: true,
+          children: [
+            Text(widget.editReason ?? '',
+                style: const TextStyle(
+                    fontSize: 15, color: FlowColors.darkText)),
+          ],
+        ),
+
+        // Gold & Loan
+        _summarySection(
+          title: 'GOLD & LOAN',
+          onEdit: () => setState(() => _step = 1),
+          children: [
+            _summaryRow('Pledge No.', '#${p.pledgeNumber}', highlight: true),
+            _summaryRow('Date', isoToDisplay(p.pledgeDate)),
+            _summaryRow(
+                'Gross Weight', '${_grossWeight.toStringAsFixed(2)} g'),
+            _summaryRow(
+                'Net Weight', '${_netWeight.toStringAsFixed(2)} g'),
+            _summaryRow('Pledge Rate', '${money(_pledgeRate)}/g'),
+            _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
+          ],
+        ),
+
+        // Customer
+        _summarySection(
+          title: 'CUSTOMER',
+          onEdit: () => setState(() => _step = 2),
+          children: customer != null && customer.name.isNotEmpty
+              ? [
+                  if (customer.phone.isNotEmpty)
+                    _summaryRow('Phone', customer.phone),
+                  _summaryRow('Name', customer.name),
+                  if (customer.address.isNotEmpty ||
+                      (customer.district?.isNotEmpty ?? false))
+                    _summaryRow(
+                      'Address',
+                      formatCustomerAddress(
+                        address: customer.address.isNotEmpty
+                            ? customer.address
+                            : null,
+                        district: customer.district,
+                        state: customer.state,
+                        pinCode: customer.pinCode,
+                      ),
+                    ),
+                  if (customer.idNumber.isNotEmpty)
+                    _summaryRow(customer.idProofType, customer.idNumber),
+                ]
+              : [
+                  const Text('No customer details entered.',
+                      style:
+                          TextStyle(color: Colors.black45, fontSize: 15)),
+                ],
+        ),
+
+        // Items
+        _summarySection(
+          title: 'ITEMS',
+          onEdit: () => setState(() => _step = 3),
+          children: itemData != null && itemData.items.isNotEmpty
+              ? [
+                  ...List.generate(itemData.items.length, (i) {
+                    final it = itemData.items[i];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (i > 0) const Divider(height: 16, thickness: 0.8),
+                        Text('Item ${i + 1}: ${it.itemType}',
+                            style: const TextStyle(
+                                fontSize: 17, fontWeight: FontWeight.w600)),
+                        _summaryRow('  Quantity', '${it.quantity}'),
+                        _summaryRow('  Gross',
+                            '${it.grossWeight.toStringAsFixed(2)} g'),
+                        _summaryRow('  Net',
+                            '${it.netWeight.toStringAsFixed(2)} g'),
+                        if (it.purity != null && it.purity!.isNotEmpty)
+                          _summaryRow('  Purity', it.purity!),
+                        if (it.notes != null && it.notes!.isNotEmpty)
+                          _summaryRow('  Notes', it.notes!),
+                      ],
+                    );
+                  }),
+                  if (itemData.photos.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                          '${itemData.photos.length} item photo(s) attached.',
+                          style: const TextStyle(
+                              color: Colors.black54, fontSize: 14)),
+                    ),
+                ]
+              : [
+                  const Text('No items detailed.',
+                      style:
+                          TextStyle(color: Colors.black45, fontSize: 15)),
+                ],
+        ),
+
+        // Payment
+        _summarySection(
+          title: 'PAYMENT',
+          onEdit: () => setState(() => _step = 4),
+          children: [
+            _summaryRow('Mode', _paymentMode.toUpperCase()),
+            if (_paymentMode != 'upi')
+              _summaryRow(
+                  'Cash',
+                  money(_paymentMode == 'cash'
+                      ? _loanAmount
+                      : (double.tryParse(
+                              _cashCtrl.text.replaceAll(',', '')) ??
+                          0))),
+            if (_paymentMode != 'cash')
+              _summaryRow(
+                  'UPI',
+                  money(_paymentMode == 'upi'
+                      ? _loanAmount
+                      : (double.tryParse(
+                              _upiCtrl.text.replaceAll(',', '')) ??
+                          0))),
+            _summaryRow('Total', money(_loanAmount), highlight: true),
+          ],
+        ),
+
+        const SizedBox(height: 24),
+        SizedBox(
+          width: double.infinity,
+          height: 64,
+          child: ElevatedButton.icon(
+            onPressed: _isSaving ? null : _updatePledge,
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: FlowColors.textOnNavyLarge))
+                : const Icon(Icons.save, size: 24),
+            label: Text(
+                _isSaving ? 'SAVING…' : 'SAVE CHANGES',
+                style: const TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.w600)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CMBColors.warningOrange,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Future<void> _updatePledge() async {
+    final existingPledge = widget.existingPledge!;
+    if (_loanAmount <= 0) {
+      _showError('Loan amount is invalid.');
+      return;
+    }
+
+    // Compute exact split from user's Step 4 selection.
+    final cashAmt = _paymentMode == 'upi'
+        ? 0.0
+        : _paymentMode == 'cash'
+            ? _loanAmount
+            : double.tryParse(
+                    _cashCtrl.text.replaceAll(',', '').trim()) ??
+                0.0;
+    final upiAmt = _paymentMode == 'cash'
+        ? 0.0
+        : _paymentMode == 'upi'
+            ? _loanAmount
+            : double.tryParse(
+                    _upiCtrl.text.replaceAll(',', '').trim()) ??
+                0.0;
+    if ((cashAmt + upiAmt - _loanAmount).abs() > 0.5) {
+      _showError(
+          'Cash + UPI must equal the loan amount (${money(_loanAmount)}). '
+          'Please go back to Step 4 and correct the payment split.');
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final now = DateTime.now();
+      final settingsRepo = AppSettingsRepository();
+      final interestRateStr =
+          await settingsRepo.getString('interest_rate') ??
+              await settingsRepo.getString('default_interest_rate');
+      final interestRate = double.tryParse(interestRateStr ?? '') ?? 18.0;
+
+      // Customer upsert
+      final customerData = _capturedCustomer;
+      int? customerId = customerData?.existingCustomerId;
+      final name = customerData?.name ?? '';
+      if (name.isNotEmpty && customerData != null) {
+        if (customerId != null) {
+          await CustomerRepository.instance
+              .updateCustomer(customerId, customerData);
+        } else {
+          customerId =
+              await CustomerRepository.instance.upsertCustomer(customerData);
+        }
+      }
+
+      final customerSnapshot = customerData != null && name.isNotEmpty
+          ? <String, dynamic>{
+              'name': customerData.name,
+              'phone': customerData.phone,
+              'address': customerData.address,
+              'district': customerData.district,
+              'state': customerData.state,
+              'pin_code': customerData.pinCode,
+              'id_proof_type': customerData.idProofType,
+              'id_proof_number': customerData.idNumber,
+            }
+          : existingPledge.customerSnapshot;
+
+      final itemData = _capturedItems;
+      final goldPhotoPaths =
+          (itemData?.photos ?? []).map((f) => f.path).toList();
+
+      List<PledgeItemModel> pledgeItems = (itemData?.items ?? [])
+          .where((e) => e.grossWeight > 0 || e.netWeight > 0)
+          .map((e) => PledgeItemModel(
+                pledgeId: existingPledge.id!,
+                itemType: e.itemType,
+                grossWeight: e.grossWeight,
+                netWeight: e.netWeight,
+                quantity: e.quantity,
+                purity: e.purity ?? '',
+                notes: e.notes,
+                createdAt: now.toIso8601String(),
+              ))
+          .toList();
+
+      if (pledgeItems.isEmpty) {
+        pledgeItems.add(PledgeItemModel(
+          pledgeId: existingPledge.id!,
+          itemType: 'Other',
+          grossWeight: _grossWeight,
+          netWeight: _netWeight,
+          createdAt: now.toIso8601String(),
+        ));
+      }
+
+      final updatedPledge = PledgeModel(
+        id: existingPledge.id,
+        pledgeNumber: existingPledge.pledgeNumber,
+        pledgeDate: existingPledge.pledgeDate,
+        loanAmount: _loanAmount,
+        interestRate: interestRate,
+        status: existingPledge.status,
+        source: existingPledge.source,
+        createdAt: existingPledge.createdAt,
+        customerId: customerId ?? existingPledge.customerId,
+        customerSnapshot: customerSnapshot,
+        goldPhotoPaths: goldPhotoPaths.isEmpty ? null : goldPhotoPaths,
+        formPhotoPaths: existingPledge.formPhotoPaths,
+        grossWeight: _grossWeight,
+        netWeight: _netWeight,
+        goldRate: _goldRate,
+        pledgeRate: _pledgeRate,
+        actualItemValue: _goldRate * _netWeight,
+        renewalParentId: existingPledge.renewalParentId,
+        renewType: existingPledge.renewType,
+        renewSubtype: existingPledge.renewSubtype,
+        closureDate: existingPledge.closureDate,
+        closedAt: existingPledge.closedAt,
+        totalInterestPaid: existingPledge.totalInterestPaid,
+        totalAmountCollected: existingPledge.totalAmountCollected,
+      );
+
+      // Build audit JSON
+      final oldJson = jsonEncode({
+        'gross_weight': existingPledge.grossWeight,
+        'net_weight': existingPledge.netWeight,
+        'principal_amount': existingPledge.loanAmount,
+        'pledge_rate': existingPledge.pledgeRate,
+        'customer_id': existingPledge.customerId,
+        'gold_photo_paths': existingPledge.goldPhotoPaths,
+      });
+      final newJson = jsonEncode({
+        'gross_weight': _grossWeight,
+        'net_weight': _netWeight,
+        'principal_amount': _loanAmount,
+        'pledge_rate': _pledgeRate,
+        'customer_id': customerId ?? existingPledge.customerId,
+        'gold_photo_paths': goldPhotoPaths,
+      });
+
+      await PledgeRepository.instance.editPledge(
+        pledgeId: existingPledge.id!,
+        updatedPledge: updatedPledge,
+        updatedItems: pledgeItems,
+        newGoldPhotoPaths: goldPhotoPaths,
+        newFormPhotoPaths: existingPledge.formPhotoPaths ?? [],
+        originalPrincipal: existingPledge.loanAmount,
+        editReason: widget.editReason ?? '',
+        oldValueJson: oldJson,
+        newValueJson: newJson,
+        newCashAmount: cashAmt,
+        newUpiAmount: upiAmt,
+      );
+
+      if (mounted) {
+        setState(() {
+          _savedPledgeNo = existingPledge.pledgeNumber;
+          _savedAmount = _loanAmount;
+          _isSaving = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Error saving changes: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Widget _summarySection({
     required String title,
     required VoidCallback onEdit,
     required List<Widget> children,
+    bool hideEditButton = false,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -871,7 +1386,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
             padding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
-              color: FlowColors.accent,
+              color: FlowColors.primary,
               borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(12),
                   topRight: Radius.circular(12)),
@@ -883,20 +1398,21 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                     style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w800,
-                        color: FlowColors.primary,
+                        color: FlowColors.goldRich,
                         letterSpacing: 0.5)),
+                if (!hideEditButton)
                 GestureDetector(
                   onTap: onEdit,
                   child: const Row(
                     children: [
                       Icon(Icons.edit_note,
-                          size: 16, color: FlowColors.primary),
+                          size: 16, color: FlowColors.goldRich),
                       SizedBox(width: 4),
                       Text('EDIT',
                           style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
-                              color: FlowColors.primary)),
+                              color: FlowColors.goldRich)),
                     ],
                   ),
                 ),
@@ -916,22 +1432,22 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
 
   Widget _summaryRow(String label, String value, {bool highlight = false}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 126,
+            width: 150,
             child: Text(label,
                 style: const TextStyle(
-                    fontSize: 14,
-                    color: Colors.black54,
+                    fontSize: 17,
+                    color: FlowColors.medText,
                     fontWeight: FontWeight.w500)),
           ),
           Expanded(
             child: Text(value,
                 style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 18,
                     fontWeight:
                         highlight ? FontWeight.bold : FontWeight.w600,
                     color: highlight
@@ -950,13 +1466,19 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     TextEditingController ctrl, {
     bool dense = false,
     VoidCallback? onChanged,
+    TextInputAction? textInputAction,
+    ValueChanged<String>? onSubmitted,
+    FocusNode? focusNode,
   }) {
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 10 : 14),
       child: TextField(
         controller: ctrl,
+        focusNode: focusNode,
         keyboardType:
             const TextInputType.numberWithOptions(decimal: true),
+        textInputAction: textInputAction,
+        onSubmitted: onSubmitted,
         inputFormatters: [
           FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
         ],
@@ -974,12 +1496,18 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     String? suffixText,
     bool dense = false,
     bool indianFormat = false,
+    TextInputAction? textInputAction,
+    ValueChanged<String>? onSubmitted,
+    FocusNode? focusNode,
   }) {
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 10 : 14),
       child: TextField(
         controller: ctrl,
+        focusNode: focusNode,
         keyboardType: TextInputType.number,
+        textInputAction: textInputAction,
+        onSubmitted: onSubmitted,
         inputFormatters: indianFormat
             ? [IndianNumberFormatter()]
             : [FilteringTextInputFormatter.digitsOnly],
@@ -1147,18 +1675,26 @@ class _CardLabel extends StatelessWidget {
 // ─── Success screen ───────────────────────────────────────────────────────────
 
 class _SuccessScreen extends StatelessWidget {
-  const _SuccessScreen({required this.pledgeNo, required this.amount});
+  const _SuccessScreen({
+    required this.pledgeNo,
+    required this.amount,
+    this.isEdit = false,
+  });
   final String pledgeNo;
   final double amount;
+  final bool isEdit;
 
   @override
   Widget build(BuildContext context) {
+    final title = isEdit ? 'Pledge Updated' : 'Pledge Created';
+    final message = isEdit ? 'Changes Saved!' : 'Pledge Saved!';
+    final btnLabel = isEdit ? 'DONE' : 'BACK TO HOME';
     return Scaffold(
       backgroundColor: FlowColors.bg,
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
         foregroundColor: FlowColors.goldRich,
-        title: const Text('Pledge Created'),
+        title: Text(title),
         automaticallyImplyLeading: false,
       ),
       body: Center(
@@ -1170,49 +1706,36 @@ class _SuccessScreen extends StatelessWidget {
               const Icon(Icons.check_circle,
                   color: FlowColors.green, size: 80),
               const SizedBox(height: 20),
-              const Text('Pledge Saved!',
-                  style: TextStyle(
+              Text(message,
+                  style: const TextStyle(
                       fontSize: 26,
                       color: FlowColors.green,
                       fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: FlowColors.greenLight),
-                ),
-                child: Column(
-                  children: [
-                    _row('Pledge Number', '#$pledgeNo'),
-                    const SizedBox(height: 6),
-                    _row('Loan Amount', money(amount)),
-                  ],
-                ),
-              ),
+              _SuccessValuesCard(pledgeNo: pledgeNo, amount: amount),
               const SizedBox(height: 28),
-              OutlinedButton.icon(
-                onPressed: () {},
-                icon:
-                    const Icon(Icons.print, color: FlowColors.primary),
-                label: const Text('PRINT RECEIPT',
-                    style: TextStyle(
-                        fontSize: 16, color: FlowColors.primary)),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: FlowColors.primary),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 14),
+              if (!isEdit) ...[
+                OutlinedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.print, color: FlowColors.primary),
+                  label: const Text('PRINT RECEIPT',
+                      style: TextStyle(
+                          fontSize: 16, color: FlowColors.primary)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: FlowColors.primary),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 14),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 14),
+                const SizedBox(height: 14),
+              ],
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.home),
-                  label: const Text('BACK TO HOME',
-                      style: TextStyle(fontSize: 17)),
+                  icon: const Icon(Icons.check),
+                  label: Text(btnLabel,
+                      style: const TextStyle(fontSize: 17)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: FlowColors.primary,
                     foregroundColor: FlowColors.textOnNavyLarge,
@@ -1229,17 +1752,49 @@ class _SuccessScreen extends StatelessWidget {
     );
   }
 
-  Widget _row(String label, String value) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label,
-            style:
-                const TextStyle(fontSize: 16, color: Colors.black54)),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 17, fontWeight: FontWeight.bold)),
-      ],
+}
+
+/// Prominent navy card with gold values used on the success screens to make
+/// the Pledge Number and Amount Disbursed stand out.
+class _SuccessValuesCard extends StatelessWidget {
+  const _SuccessValuesCard({required this.pledgeNo, required this.amount});
+  final String pledgeNo;
+  final double amount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 18),
+      decoration: BoxDecoration(
+        color: FlowColors.primary,
+        borderRadius: BorderRadius.circular(16),
+        border: const Border.fromBorderSide(
+            BorderSide(color: FlowColors.borderOnNavy, width: 0.8)),
+      ),
+      child: Column(
+        children: [
+          const Text('Pledge Number',
+              style: TextStyle(
+                  fontSize: 16, color: FlowColors.textOnNavyMuted)),
+          const SizedBox(height: 4),
+          Text('#$pledgeNo',
+              style: const TextStyle(
+                  fontSize: 40,
+                  fontWeight: FontWeight.bold,
+                  color: FlowColors.goldRich)),
+          const SizedBox(height: 18),
+          const Text('Amount Disbursed',
+              style: TextStyle(
+                  fontSize: 16, color: FlowColors.textOnNavyMuted)),
+          const SizedBox(height: 4),
+          Text(money(amount),
+              style: const TextStyle(
+                  fontSize: 34,
+                  fontWeight: FontWeight.bold,
+                  color: FlowColors.goldRich)),
+        ],
+      ),
     );
   }
 }

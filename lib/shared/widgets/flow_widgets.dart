@@ -178,6 +178,57 @@ class FlowNoticeBox extends StatelessWidget {
   }
 }
 
+/// `DD/MM/YYYY` for a [DateTime].
+String formatDmy(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}/'
+    '${d.month.toString().padLeft(2, '0')}/'
+    '${d.year}';
+
+/// Navy banner with gold text used to flag a non-editable context date
+/// (pledge / closure / renewal / context date) on backdated flows.
+class ContextDateBanner extends StatelessWidget {
+  const ContextDateBanner({
+    super.key,
+    required this.label,
+    required this.date,
+  });
+
+  /// Prefix label, e.g. "Pledge Date", "Closure Date", "Context Date".
+  final String label;
+  final DateTime date;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: FlowColors.primary,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: FlowColors.borderOnNavy, width: 0.8),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.event, color: FlowColors.goldRich, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '📅 $label: ${formatDmy(date)}',
+              style: const TextStyle(
+                color: FlowColors.goldRich,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const Icon(Icons.lock, color: FlowColors.textOnNavyMuted, size: 16),
+        ],
+      ),
+    );
+  }
+}
+
 class DetailRow extends StatelessWidget {
   const DetailRow({
     super.key,
@@ -235,11 +286,13 @@ class StatusBadge extends StatelessWidget {
     required this.text,
     required this.color,
     required this.backgroundColor,
+    this.borderColor,
   });
 
   final String text;
   final Color color;
   final Color backgroundColor;
+  final Color? borderColor;
 
   @override
   Widget build(BuildContext context) {
@@ -248,6 +301,8 @@ class StatusBadge extends StatelessWidget {
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(20),
+        border:
+            borderColor != null ? Border.all(color: borderColor!, width: 1.5) : null,
       ),
       child: Text(
         text,

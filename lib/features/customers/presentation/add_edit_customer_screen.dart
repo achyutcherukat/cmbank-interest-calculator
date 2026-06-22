@@ -67,6 +67,9 @@ class _AddEditCustomerScreenState extends State<AddEditCustomerScreen> {
         idNumber: row['id_proof_number'] as String? ?? '',
         idProofPhotos: existingPhotos,
         existingCustomerId: row['id'] as int?,
+        pinCode: row['pin_code'] as String?,
+        district: row['district'] as String?,
+        state: row['state'] as String?,
       );
       _loading = false;
     });

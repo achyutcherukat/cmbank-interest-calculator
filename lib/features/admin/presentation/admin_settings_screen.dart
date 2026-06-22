@@ -1,33 +1,31 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/security/pin_hasher.dart';
+import '../../../core/services/backup_scheduler.dart';
+import '../../../core/services/backup_status_service.dart';
+import '../../../core/services/drive_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../backup/presentation/backup_actions.dart';
 import '../data/admin_repository.dart';
+import '../data/audit_log_repository.dart';
+import '../data/item_types_repository.dart';
+import '../data/purity_types_repository.dart';
 
 // ─── Master item model ────────────────────────────────────────────────────────
 
 class _MasterItem {
-  _MasterItem({required this.name, required this.enabled});
+  _MasterItem({this.id, required this.name, required this.enabled});
+  final int? id;
   String name;
   bool enabled;
-
-  Map<String, dynamic> toJson() => {'name': name, 'enabled': enabled};
-  factory _MasterItem.fromJson(Map<String, dynamic> j) =>
-      _MasterItem(name: j['name'] as String, enabled: j['enabled'] as bool);
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
-const _kDefaultItemTypes = [
-  'Gold Ring', 'Bangles', 'Necklace', 'Earrings',
-  'Chain', 'Bracelet', 'Gold Coins', 'Other',
-];
-const _kDefaultPurityTypes = ['24K', '22K', '18K', 'Other'];
 const _kFrequencies = ['30 mins', '1 hour', '2 hours', '3 hours', '6 hours'];
 const _kFreqValues = [30, 60, 120, 180, 360];
 
@@ -46,6 +44,8 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
 
   // General
   double _interestRate = 18.0;
+  bool _biometricEnabled = false;
+  bool _biometricAvailable = false;
 
   // Masters
   List<_MasterItem> _itemTypes = [];
@@ -53,10 +53,15 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
   List<Map<String, dynamic>> _expenseCategories = [];
 
   // Backup
-  TimeOfDay _backupStart = const TimeOfDay(hour: 22, minute: 0);
-  TimeOfDay _backupEnd = const TimeOfDay(hour: 6, minute: 0);
-  int _backupFreqMins = 60;
-  int _backupRetentionDays = 30;
+  TimeOfDay _backupStart = const TimeOfDay(hour: 9, minute: 0);
+  TimeOfDay _backupEnd = const TimeOfDay(hour: 17, minute: 30);
+  int _backupFreqMins = 30;
+  static const int _backupRetentionDays = 7; // fixed, not configurable
+  BackupStatusSnapshot? _backupStatus;
+  bool _busy = false;
+
+  // Audit log
+  int _auditLogCount = 0;
 
   bool _loading = true;
 
@@ -93,32 +98,27 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
       final db = await AppDatabase.instance.database;
 
       // Interest rate
-      final rateStr = await _settings.getString('default_interest_rate');
+      final rateStr = await _settings.getString('interest_rate') ??
+          await _settings.getString('default_interest_rate');
       _interestRate = double.tryParse(rateStr ?? '') ?? 18.0;
 
-      // Item types
-      final itemJson = await _settings.getString('admin_item_types');
-      if (itemJson != null && itemJson.isNotEmpty) {
-        _itemTypes = (jsonDecode(itemJson) as List)
-            .map((j) => _MasterItem.fromJson(j as Map<String, dynamic>))
-            .toList();
-      } else {
-        _itemTypes = _kDefaultItemTypes
-            .map((n) => _MasterItem(name: n, enabled: true))
-            .toList();
-      }
+      // Biometric
+      final biometricEnabled = await _settings.getBool('biometric_enabled');
+      final auth = LocalAuthentication();
+      final canCheck = await auth.canCheckBiometrics;
+      final isSupported = await auth.isDeviceSupported();
+      _biometricEnabled = biometricEnabled;
+      _biometricAvailable = canCheck && isSupported;
 
-      // Purity types
-      final purityJson = await _settings.getString('admin_purity_types');
-      if (purityJson != null && purityJson.isNotEmpty) {
-        _purityTypes = (jsonDecode(purityJson) as List)
-            .map((j) => _MasterItem.fromJson(j as Map<String, dynamic>))
-            .toList();
-      } else {
-        _purityTypes = _kDefaultPurityTypes
-            .map((n) => _MasterItem(name: n, enabled: true))
-            .toList();
-      }
+      // Item & purity types (from the lookup tables)
+      _itemTypes = (await ItemTypesRepository.instance.getAllItemTypes())
+          .map((t) => _MasterItem(id: t.id, name: t.name, enabled: t.isActive))
+          .toList();
+      _purityTypes =
+          (await PurityTypesRepository.instance.getAllPurityTypes())
+              .map((t) =>
+                  _MasterItem(id: t.id, name: t.name, enabled: t.isActive))
+              .toList();
 
       // Expense categories
       final cats =
@@ -129,16 +129,24 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
       // Backup
       final bStart = await _settings.getString('backup_start_time');
       final bEnd = await _settings.getString('backup_end_time');
-      final bFreq = await _settings.getString('backup_frequency_mins');
-      final bRetain = await _settings.getString('backup_retention_days');
+      final bFreq = await _settings.getString('backup_frequency');
 
       if (bStart != null) _backupStart = _parseTime(bStart);
       if (bEnd != null) _backupEnd = _parseTime(bEnd);
       _backupFreqMins = int.tryParse(bFreq ?? '') ?? 60;
-      _backupRetentionDays = int.tryParse(bRetain ?? '') ?? 30;
+
+      _backupStatus = await BackupStatusService.instance.load();
+
+      // Audit log count
+      _auditLogCount = await AuditLogRepository.instance.getCount();
     } catch (_) {}
 
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _refreshBackupStatus() async {
+    final status = await BackupStatusService.instance.load();
+    if (mounted) setState(() => _backupStatus = status);
   }
 
   TimeOfDay _parseTime(String s) {
@@ -156,16 +164,31 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
 
   // ── Save helpers ──────────────────────────────────────────────────────────────
 
-  Future<void> _saveItemTypes() async {
-    final json = jsonEncode(_itemTypes.map((e) => e.toJson()).toList());
-    await _settings.upsertMany(
-        {'admin_item_types': (value: json, type: 'json')});
+  Future<void> _reloadItemTypes() async {
+    final list = await ItemTypesRepository.instance.getAllItemTypes();
+    if (mounted) {
+      setState(() => _itemTypes = list
+          .map((t) =>
+              _MasterItem(id: t.id, name: t.name, enabled: t.isActive))
+          .toList());
+    }
   }
 
-  Future<void> _savePurityTypes() async {
-    final json = jsonEncode(_purityTypes.map((e) => e.toJson()).toList());
-    await _settings.upsertMany(
-        {'admin_purity_types': (value: json, type: 'json')});
+  Future<void> _reloadPurityTypes() async {
+    final list = await PurityTypesRepository.instance.getAllPurityTypes();
+    if (mounted) {
+      setState(() => _purityTypes = list
+          .map((t) =>
+              _MasterItem(id: t.id, name: t.name, enabled: t.isActive))
+          .toList());
+    }
+  }
+
+  Future<void> _saveBiometric(bool value) async {
+    await _settings.upsertMany({
+      'biometric_enabled': (value: value.toString(), type: 'bool'),
+    });
+    setState(() => _biometricEnabled = value);
   }
 
   Future<void> _saveBackupSettings() async {
@@ -173,11 +196,14 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
       'backup_start_time':
           (value: _fmtTime(_backupStart), type: 'string'),
       'backup_end_time': (value: _fmtTime(_backupEnd), type: 'string'),
-      'backup_frequency_mins':
-          (value: '$_backupFreqMins', type: 'int'),
+      'backup_frequency': (value: '$_backupFreqMins', type: 'int'),
       'backup_retention_days':
           (value: '$_backupRetentionDays', type: 'int'),
     });
+    // Re-register the background task so the new schedule takes effect.
+    try {
+      await BackupScheduler.reschedule();
+    } catch (_) {}
     _snack('Backup settings saved');
   }
 
@@ -210,17 +236,18 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                 _interestRateTile(),
                 _changeCommonPinTile(),
                 _changeAdminPinTile(),
+                _biometricTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Masters', Icons.list_alt),
-                _mastersTile('Item Types', _itemTypes, _saveItemTypes),
-                _mastersTile('Purity Types', _purityTypes, _savePurityTypes),
+                _mastersTile('Item Types', _itemTypes, true),
+                _mastersTile('Purity Types', _purityTypes, false),
                 _expenseCategoriesTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Backup', Icons.backup),
                 _backupCard(),
                 const SizedBox(height: 10),
-                _sectionHeader('Day Management', Icons.calendar_today),
-                _dayManagementCard(),
+                _sectionHeader('Audit Log', Icons.history),
+                _auditLogTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Info', Icons.info_outline),
                 _infoCard(),
@@ -244,6 +271,32 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                   fontWeight: FontWeight.bold,
                   color: FlowColors.primary)),
         ],
+      ),
+    );
+  }
+
+  // ── Biometric ─────────────────────────────────────────────────────────────────
+
+  Widget _biometricTile() {
+    return FlowCard(
+      padding: const EdgeInsets.all(0),
+      child: SwitchListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        secondary: const Icon(Icons.fingerprint,
+            color: FlowColors.primary, size: 28),
+        title: const Text('Fingerprint Login',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        subtitle: Text(
+          _biometricAvailable
+              ? 'Use fingerprint to unlock the app'
+              : 'Fingerprint not available on this device',
+          style:
+              const TextStyle(fontSize: 14, color: FlowColors.medText),
+        ),
+        value: _biometricEnabled,
+        onChanged: _biometricAvailable ? _saveBiometric : null,
+        activeThumbColor: FlowColors.goldRich,
       ),
     );
   }
@@ -318,8 +371,8 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
               if (val == null || val <= 0) return;
               Navigator.pop(ctx);
               await _settings.upsertMany({
-                'default_interest_rate':
-                    (value: val.toStringAsFixed(2), type: 'double'),
+                'interest_rate':
+                    (value: val.toStringAsFixed(2), type: 'string'),
               });
               setState(() => _interestRate = val);
               _snack(
@@ -490,8 +543,37 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
 
   // ── Masters ───────────────────────────────────────────────────────────────────
 
-  Widget _mastersTile(String title, List<_MasterItem> items,
-      Future<void> Function() onSave) {
+  Widget _mastersTile(String title, List<_MasterItem> items, bool isItem) {
+    Future<void> toggle(int id, bool val) async {
+      if (isItem) {
+        await ItemTypesRepository.instance.toggleItemType(id, val);
+        await _reloadItemTypes();
+      } else {
+        await PurityTypesRepository.instance.togglePurityType(id, val);
+        await _reloadPurityTypes();
+      }
+    }
+
+    Future<void> rename(int id, String name) async {
+      if (isItem) {
+        await ItemTypesRepository.instance.updateItemType(id, name);
+        await _reloadItemTypes();
+      } else {
+        await PurityTypesRepository.instance.updatePurityType(id, name);
+        await _reloadPurityTypes();
+      }
+    }
+
+    Future<void> add(String name) async {
+      if (isItem) {
+        await ItemTypesRepository.instance.addItemType(name);
+        await _reloadItemTypes();
+      } else {
+        await PurityTypesRepository.instance.addPurityType(name);
+        await _reloadPurityTypes();
+      }
+    }
+
     return FlowCard(
       padding: const EdgeInsets.all(0),
       child: ExpansionTile(
@@ -509,26 +591,22 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                 const TextStyle(fontSize: 13, color: FlowColors.medText)),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         children: [
-          ...items.asMap().entries.map((e) => _masterRow(
-              e.value,
+          ...items.map((item) => _masterRow(
+              item,
               onToggle: (val) async {
-                setState(() => items[e.key].enabled = val);
-                await onSave();
+                if (item.id != null) await toggle(item.id!, val);
               },
               onEdit: () => _showEditMasterDialog(
-                  items[e.key].name,
+                  item.name,
                   (newName) async {
-                    setState(() => items[e.key].name = newName);
-                    await onSave();
+                    if (item.id != null) await rename(item.id!, newName);
                   }))),
           const SizedBox(height: 6),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: () => _showAddMasterDialog((name) async {
-                setState(() =>
-                    items.add(_MasterItem(name: name, enabled: true)));
-                await onSave();
+                await add(name);
               }),
               icon: const Icon(Icons.add, size: 18),
               label: Text('Add $title',
@@ -853,12 +931,219 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
   // ── Backup ────────────────────────────────────────────────────────────────────
 
   Widget _backupCard() {
+    return Column(
+      children: [
+        _backupAccountCard(),
+        const SizedBox(height: 10),
+        _backupStatusCard(),
+        const SizedBox(height: 10),
+        _backupActionsCard(),
+        const SizedBox(height: 10),
+        _backupScheduleCard(),
+      ],
+    );
+  }
+
+  // Account section ─────────────────────────────────────────────────────────────
+
+  Widget _backupAccountCard() {
+    final s = _backupStatus;
+    final signedIn = s?.driveAuthed ?? false;
+    final email = s?.signedInEmail ?? '';
     return FlowCard(
-      header: 'BACKUP SCHEDULE',
+      header: 'GOOGLE DRIVE ACCOUNT',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Schedule
+          Row(
+            children: [
+              Icon(signedIn ? Icons.account_circle : Icons.cloud_off,
+                  color: signedIn ? FlowColors.green : FlowColors.medText,
+                  size: 28),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  signedIn && email.isNotEmpty ? email : 'Not signed in',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              icon: Icon(signedIn ? Icons.logout : Icons.login),
+              label: Text(signedIn ? 'SIGN OUT' : 'SIGN IN TO GOOGLE'),
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      setState(() => _busy = true);
+                      if (signedIn) {
+                        await DriveService.instance.signOut();
+                      } else {
+                        await DriveService.instance.signIn();
+                      }
+                      await _refreshBackupStatus();
+                      if (mounted) setState(() => _busy = false);
+                    },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Status section ──────────────────────────────────────────────────────────────
+
+  Widget _backupStatusCard() {
+    final s = _backupStatus;
+    final photoLine = s == null
+        ? '—'
+        : '${formatBackupTime(s.lastPhotoBackup)} · ${s.pendingPhotos} pending';
+    final driveStorage = (s?.driveFreeMb != null)
+        ? '${(s!.driveFreeMb! / 1024).toStringAsFixed(1)} GB free of 15 GB'
+        : 'Unknown';
+    final deviceStorage = (s?.deviceFreeMb != null)
+        ? '${s!.deviceFreeMb!.round()} MB free'
+        : 'Unknown';
+    return FlowCard(
+      header: 'STATUS',
+      child: Column(
+        children: [
+          _statusRow('Drive backup', formatBackupTime(s?.lastDriveBackup)),
+          _statusRow('Photo sync', photoLine),
+          _statusRow('Local backup', formatBackupTime(s?.lastLocalBackup)),
+          _statusRow('Drive storage', driveStorage),
+          _statusRow('Device storage', deviceStorage, isLast: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusRow(String label, String value, {bool isLast = false}) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 14, color: FlowColors.medText)),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Actions section ─────────────────────────────────────────────────────────────
+
+  Widget _backupActionsCard() {
+    return FlowCard(
+      header: 'ACTIONS',
+      child: Column(
+        children: [
+          _fullActionButton(
+            'BACKUP NOW',
+            Icons.backup,
+            filled: true,
+            onTap: () async {
+              await BackupActions.backupNow(context);
+              await _refreshBackupStatus();
+            },
+          ),
+          const SizedBox(height: 10),
+          _fullActionButton(
+            'RESTORE PHOTOS',
+            Icons.photo_library_outlined,
+            filled: false,
+            onTap: () => BackupActions.restorePhotosNow(context),
+          ),
+          const SizedBox(height: 10),
+          _fullActionButton(
+            'BACKUP TO DEVICE',
+            Icons.sd_storage,
+            filled: true,
+            onTap: () async {
+              await BackupActions.backupToDevice(context);
+              await _refreshBackupStatus();
+            },
+          ),
+          const SizedBox(height: 10),
+          _fullActionButton(
+            'RESTORE FROM DRIVE',
+            Icons.cloud_download,
+            filled: false,
+            onTap: () => BackupActions.restoreFromDrive(context),
+          ),
+          const SizedBox(height: 10),
+          _fullActionButton(
+            'RESTORE FROM DEVICE',
+            Icons.restore_page,
+            filled: false,
+            onTap: () => BackupActions.restoreFromDevice(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fullActionButton(
+    String label,
+    IconData icon, {
+    required bool filled,
+    required VoidCallback onTap,
+  }) {
+    final child = filled
+        ? ElevatedButton.icon(
+            onPressed: _busy ? null : onTap,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: FlowColors.primary,
+              foregroundColor: FlowColors.textOnNavyLarge,
+              minimumSize: const Size.fromHeight(52),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: Icon(icon),
+            label: Text(label,
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold)),
+          )
+        : OutlinedButton.icon(
+            onPressed: _busy ? null : onTap,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: FlowColors.primary,
+              side: const BorderSide(color: FlowColors.primary),
+              minimumSize: const Size.fromHeight(52),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: Icon(icon),
+            label: Text(label,
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold)),
+          );
+    return SizedBox(width: double.infinity, child: child);
+  }
+
+  // Schedule section ────────────────────────────────────────────────────────────
+
+  Widget _backupScheduleCard() {
+    return FlowCard(
+      header: 'AUTOMATIC BACKUP SCHEDULE',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Row(
             children: [
               Expanded(
@@ -873,7 +1158,6 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
             ],
           ),
           const SizedBox(height: 14),
-          // Frequency
           DropdownButtonFormField<int>(
             initialValue: _backupFreqMins,
             decoration: const InputDecoration(
@@ -888,25 +1172,18 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                     style: const TextStyle(fontSize: 17)),
               ),
             ),
-            onChanged: (v) =>
-                setState(() => _backupFreqMins = v ?? 60),
+            onChanged: (v) => setState(() => _backupFreqMins = v ?? 60),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: const [
+              Icon(Icons.history, size: 18, color: FlowColors.medText),
+              SizedBox(width: 8),
+              Text('Retention: Last 7 days of backups kept',
+                  style: TextStyle(fontSize: 14, color: FlowColors.medText)),
+            ],
           ),
           const SizedBox(height: 14),
-          // Retention
-          TextField(
-            controller: TextEditingController(
-                text: '$_backupRetentionDays'),
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            style: const TextStyle(fontSize: 18),
-            decoration: const InputDecoration(
-              labelText: 'Keep backups for (days)',
-              prefixIcon: Icon(Icons.history),
-            ),
-            onChanged: (v) =>
-                setState(() => _backupRetentionDays = int.tryParse(v) ?? 30),
-          ),
-          const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -920,31 +1197,14 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
               ),
               icon: const Icon(Icons.save),
               label: const Text('Save Schedule',
-                  style: TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold)),
+                  style:
+                      TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _actionBtn(
-                  icon: Icons.backup,
-                  label: 'BACKUP NOW',
-                  color: FlowColors.primary,
-                  onTap: () => _snack('Backup feature coming soon'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _actionBtn(
-                  icon: Icons.restore,
-                  label: 'RESTORE',
-                  color: FlowColors.orange,
-                  onTap: () => _snack('Restore feature coming soon'),
-                ),
-              ),
-            ],
+          const Text(
+            'Photos are synced automatically with every backup.',
+            style: TextStyle(fontSize: 13, color: FlowColors.medText),
           ),
         ],
       ),
@@ -990,36 +1250,100 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     );
   }
 
-  Widget _actionBtn({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return SizedBox(
-      height: 50,
-      child: OutlinedButton.icon(
-        onPressed: onTap,
-        icon: Icon(icon, size: 18),
-        label: Text(label,
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.bold)),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: color,
-          side: BorderSide(color: color),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10)),
-        ),
+  // ── Audit Log ─────────────────────────────────────────────────────────────────
+
+  Widget _auditLogTile() {
+    return FlowCard(
+      padding: const EdgeInsets.all(0),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        leading: const Icon(Icons.history, color: FlowColors.primary, size: 28),
+        title: const Text('Clear Old Entries',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        subtitle: Text('$_auditLogCount entries stored',
+            style: const TextStyle(fontSize: 14, color: FlowColors.medText)),
+        trailing: const Icon(Icons.delete_sweep, color: FlowColors.orange),
+        minVerticalPadding: 16,
+        onTap: _showPurgeDialog,
       ),
     );
   }
 
-  // ── Day Management ────────────────────────────────────────────────────────────
+  void _showPurgeDialog() {
+    const options = [
+      (30, 'Last 30 days'),
+      (90, 'Last 90 days'),
+      (180, 'Last 180 days'),
+      (365, 'Last 1 year'),
+    ];
+    int selected = 90;
 
-  Widget _dayManagementCard() {
-    return FlowCard(
-      header: 'UNLOCK LOCKED DAY',
-      child: _DayUnlockWidget(onDone: () => _snack('Day unlocked')),
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx2, setDlg) => AlertDialog(
+          title: const Text('Clear Old Audit Entries',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: FlowColors.primary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Keep entries from the last:',
+                  style: TextStyle(fontSize: 15)),
+              const SizedBox(height: 12),
+              RadioGroup<int>(
+                groupValue: selected,
+                onChanged: (v) {
+                  if (v != null) setDlg(() => selected = v);
+                },
+                child: Column(
+                  children: options
+                      .map((o) => RadioListTile<int>(
+                            value: o.$1,
+                            title: Text(o.$2,
+                                style: const TextStyle(fontSize: 16)),
+                            activeColor: FlowColors.primary,
+                            contentPadding: EdgeInsets.zero,
+                          ))
+                      .toList(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx2),
+              child: const Text('Cancel',
+                  style: TextStyle(fontSize: 16, color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: FlowColors.orange),
+              onPressed: () async {
+                Navigator.pop(ctx2);
+                await _settings.upsertMany({
+                  'audit_log_retention_days':
+                      (value: '$selected', type: 'int'),
+                });
+                final deleted =
+                    await AuditLogRepository.instance.purge(selected);
+                _auditLogCount =
+                    await AuditLogRepository.instance.getCount();
+                if (mounted) {
+                  setState(() {});
+                  _snack('$deleted entries deleted');
+                }
+              },
+              child: const Text('Clear',
+                  style: TextStyle(
+                      fontSize: 16, color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1035,210 +1359,6 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
           const DetailRow(label: 'Build Number', value: '1', isLast: true),
         ],
       ),
-    );
-  }
-}
-
-// ─── Day Unlock Widget ────────────────────────────────────────────────────────
-
-class _DayUnlockWidget extends StatefulWidget {
-  const _DayUnlockWidget({required this.onDone});
-  final VoidCallback onDone;
-
-  @override
-  State<_DayUnlockWidget> createState() => _DayUnlockWidgetState();
-}
-
-class _DayUnlockWidgetState extends State<_DayUnlockWidget> {
-  DateTime _selectedDate = DateTime.now();
-  Map<String, dynamic>? _dayBalance;
-  bool _checking = false;
-  bool _unlocking = false;
-  final _reasonCtrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _reasonCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _checkDay() async {
-    setState(() => _checking = true);
-    final fmt =
-        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
-    final bal = await AdminRepository.instance.getDayBalance(fmt);
-    if (mounted) {
-      setState(() {
-        _dayBalance = bal;
-        _checking = false;
-      });
-    }
-  }
-
-  Future<void> _unlock() async {
-    final reason = _reasonCtrl.text.trim();
-    if (reason.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please enter a reason'),
-            backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    setState(() => _unlocking = true);
-    final fmt =
-        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
-    await AdminRepository.instance.unlockDay(fmt, reason);
-    if (mounted) {
-      setState(() {
-        _unlocking = false;
-        _dayBalance = null;
-        _reasonCtrl.clear();
-      });
-      widget.onDone();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isLocked = (_dayBalance?['is_locked'] as int?) == 1;
-    final dateLabel =
-        '${_selectedDate.day.toString().padLeft(2, '0')}/${_selectedDate.month.toString().padLeft(2, '0')}/${_selectedDate.year}';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Date selector
-        GestureDetector(
-          onTap: () async {
-            final picked = await showDatePicker(
-              context: context,
-              initialDate: _selectedDate,
-              firstDate: DateTime(2020),
-              lastDate: DateTime.now(),
-            );
-            if (picked != null) {
-              setState(() => _selectedDate = picked);
-              await _checkDay();
-            }
-          },
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            decoration: BoxDecoration(
-              border: Border.all(color: FlowColors.primaryLight),
-              borderRadius: BorderRadius.circular(10),
-              color: Colors.white,
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.calendar_today,
-                    color: FlowColors.primary, size: 22),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(dateLabel,
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold)),
-                ),
-                const Icon(Icons.arrow_drop_down, color: Colors.black45),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        if (_checking)
-          const Center(
-              child: Padding(
-                  padding: EdgeInsets.all(12),
-                  child: CircularProgressIndicator()))
-        else if (_dayBalance == null)
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: OutlinedButton.icon(
-              onPressed: _checkDay,
-              icon: const Icon(Icons.search),
-              label: const Text('Check Day Status',
-                  style: TextStyle(fontSize: 16)),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: FlowColors.primary,
-                side:
-                    const BorderSide(color: FlowColors.primaryLight),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-          )
-        else ...[
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: isLocked ? FlowColors.redLight : FlowColors.greenLight,
-              border: Border.all(
-                  color: isLocked ? FlowColors.red : FlowColors.green),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isLocked ? Icons.lock : Icons.lock_open,
-                  color: isLocked ? FlowColors.red : FlowColors.green,
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  isLocked ? 'This day is LOCKED' : 'This day is not locked',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color:
-                          isLocked ? FlowColors.red : FlowColors.green),
-                ),
-              ],
-            ),
-          ),
-          if (isLocked) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _reasonCtrl,
-              maxLines: 2,
-              style: const TextStyle(fontSize: 16),
-              decoration: const InputDecoration(
-                labelText: 'Reason for unlocking (required)',
-                prefixIcon: Icon(Icons.edit_note),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton.icon(
-                onPressed: _unlocking ? null : _unlock,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: FlowColors.red,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                icon: _unlocking
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.lock_open),
-                label: Text(
-                    _unlocking ? 'Unlocking...' : 'UNLOCK DAY',
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ],
-        ],
-      ],
     );
   }
 }

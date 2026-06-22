@@ -2,16 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/theme.dart';
-import '../../../core/database/app_database.dart';
-import '../../../core/settings/app_settings_repository.dart';
+import '../../../core/services/backup_status_service.dart';
+import '../../../shared/widgets/flow_widgets.dart';
+import '../../../core/services/photo_backup_service.dart';
+import '../../accounts/data/daily_balance_repository.dart';
 import '../../accounts/presentation/daily_accounts_screen.dart';
+import '../../gold_stock/data/gold_rates_repository.dart';
 import '../../customers/presentation/customer_list_screen.dart';
 import '../../gold_stock/presentation/gold_stock_screen.dart';
 import '../../pledges/presentation/closed_pledges_screen.dart';
 import '../../pledges/presentation/load_existing_pledge_screen.dart';
 import '../../pledges/presentation/new_pledge_screen.dart';
 import '../../pledges/presentation/open_pledge_screen.dart';
-import '../../settings/presentation/settings_screen.dart';
 import '../../admin/presentation/admin_screen.dart';
 import 'calculator_screen.dart';
 
@@ -35,17 +37,16 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _settings    = AppSettingsRepository();
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   double  _goldRate   = 0;
   double  _pledgeRate = 0;
   double  _todayCash  = 0;
   double  _todayUpi   = 0;
-  String? _lastBackupAt;
 
-  bool _showLowStorageWarning = false;
-  bool _showDriveLowWarning   = false;
+  BackupStatusSnapshot? _status;
+  bool _lowStorageDismissed = false;
+  bool _driveLowDismissed   = false;
 
   @override
   void initState() {
@@ -59,132 +60,64 @@ class _HomeScreenState extends State<HomeScreen> {
       _loadTodayAccounts(),
       _loadBackupStatus(),
     ]);
+    if (PhotoBackupService.instance.needsRestore) {
+      PhotoBackupService.instance.needsRestore = false;
+      final result = await PhotoBackupService.instance.restoreMissingPhotos();
+      if (mounted && result.failed > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          backgroundColor: CMBColors.warningOrange,
+          content: Text(
+            'Photo restore: ${result.restored}/${result.found} downloaded. '
+            '${result.failed} failed — tap "Restore Photos" in Admin Settings to retry.',
+          ),
+          duration: const Duration(seconds: 6),
+        ));
+      } else if (mounted && result.restored > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          backgroundColor: CMBColors.navy,
+          content: Text(
+            '${result.restored} photo${result.restored == 1 ? '' : 's'} restored successfully.',
+          ),
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    }
   }
 
   // ─── Data loaders ──────────────────────────────────────────────────────────
 
   Future<void> _loadSettings() async {
-    final gr = await _settings.getString('gold_rate');
-    final pr = await _settings.getString('default_pledge_rate');
+    final rates = await GoldRatesRepository.instance.getCurrentRates();
     if (mounted) {
       setState(() {
-        _goldRate   = double.tryParse(gr ?? '') ?? 0;
-        _pledgeRate = double.tryParse(pr ?? '') ?? 0;
+        _goldRate   = rates?.goldRate ?? 0;
+        _pledgeRate = rates?.pledgeRate ?? 0;
       });
     }
   }
 
   Future<void> _loadTodayAccounts() async {
-    final db        = await AppDatabase.instance.database;
-    final now       = DateTime.now();
-    final today     = _isoDate(now);
-    final yesterday = _isoDate(now.subtract(const Duration(days: 1)));
-
-    double q(List<Map<String, dynamic>> r) => (r.first['s'] as num).toDouble();
-
-    // Opening: yesterday's closing from daily_balance, else rebuild
-    final prev = await db.query('daily_balance',
-        where: 'business_date = ?', whereArgs: [yesterday], limit: 1);
-
-    double opCash, opUpi;
-    if (prev.isNotEmpty) {
-      opCash = (prev.first['closing_cash'] as num).toDouble();
-      opUpi  = (prev.first['closing_upi']  as num).toDouble();
-    } else {
-      opCash = double.tryParse(
-              await _settings.getString('opening_cash') ?? '') ?? 0;
-      opUpi  = double.tryParse(
-              await _settings.getString('opening_upi') ?? '') ?? 0;
-
-      final ci = await db.rawQuery(
-          'SELECT COALESCE(SUM(cash_amount),0) AS s FROM payments WHERE paid_at < ?',
-          [today]);
-      final ui = await db.rawQuery(
-          'SELECT COALESCE(SUM(upi_amount),0) AS s FROM payments WHERE paid_at < ?',
-          [today]);
-      final co = await db.rawQuery(
-          "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
-          "WHERE type IN ('loan_disbursed','expense') AND mode='cash' AND transaction_date < ?",
-          [today]);
-      final uo = await db.rawQuery(
-          "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
-          "WHERE type IN ('loan_disbursed','expense') AND mode='upi' AND transaction_date < ?",
-          [today]);
-      final ca = await db.rawQuery(
-          "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
-          "FROM transactions WHERE type='adjustment' AND mode='cash' AND transaction_date < ?",
-          [today]);
-      final ua = await db.rawQuery(
-          "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
-          "FROM transactions WHERE type='adjustment' AND mode='upi' AND transaction_date < ?",
-          [today]);
-
-      opCash += q(ci) - q(co) + q(ca);
-      opUpi  += q(ui) - q(uo) + q(ua);
-    }
-
-    // Today's movements
-    final cashIn = await db.rawQuery("""
-      SELECT COALESCE(SUM(
-        CASE WHEN p.cash_amount IS NOT NULL AND (p.cash_amount > 0 OR p.upi_amount > 0)
-             THEN p.cash_amount
-             WHEN t.mode='cash' THEN t.amount ELSE 0 END
-      ), 0) AS s
-      FROM transactions t LEFT JOIN payments p ON p.id = t.payment_id
-      WHERE t.type='payment_received' AND t.transaction_date=?""", [today]);
-
-    final upiIn = await db.rawQuery("""
-      SELECT COALESCE(SUM(
-        CASE WHEN p.cash_amount IS NOT NULL AND (p.cash_amount > 0 OR p.upi_amount > 0)
-             THEN p.upi_amount
-             WHEN t.mode='upi' THEN t.amount ELSE 0 END
-      ), 0) AS s
-      FROM transactions t LEFT JOIN payments p ON p.id = t.payment_id
-      WHERE t.type='payment_received' AND t.transaction_date=?""", [today]);
-
-    final cashOut = await db.rawQuery(
-        "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
-        "WHERE type IN ('loan_disbursed','expense') AND mode='cash' AND transaction_date=?",
-        [today]);
-    final upiOut = await db.rawQuery(
-        "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
-        "WHERE type IN ('loan_disbursed','expense') AND mode='upi' AND transaction_date=?",
-        [today]);
-    final adjCash = await db.rawQuery(
-        "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
-        "FROM transactions WHERE type='adjustment' AND mode='cash' AND transaction_date=?",
-        [today]);
-    final adjUpi = await db.rawQuery(
-        "SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s "
-        "FROM transactions WHERE type='adjustment' AND mode='upi' AND transaction_date=?",
-        [today]);
-
+    final today = _isoDate(DateTime.now());
+    final totals =
+        await DailyBalanceRepository.instance.calculateTotalsForDate(today);
     if (mounted) {
       setState(() {
-        _todayCash = opCash + q(cashIn) - q(cashOut) + q(adjCash);
-        _todayUpi  = opUpi  + q(upiIn)  - q(upiOut)  + q(adjUpi);
+        _todayCash = totals.closingCash;
+        _todayUpi  = totals.closingUpi;
       });
     }
   }
 
   Future<void> _loadBackupStatus() async {
-    final db = await AppDatabase.instance.database;
-    final rows = await db.query('backup_log',
-        where: 'status = ?',
-        whereArgs: ['success'],
-        orderBy: 'created_at DESC',
-        limit: 1);
-    if (mounted) {
-      setState(() => _lastBackupAt =
-          rows.isNotEmpty ? rows.first['created_at'] as String? : null);
-    }
+    final status = await BackupStatusService.instance.load();
+    if (mounted) setState(() => _status = status);
   }
 
   // ─── Rate edit bottom sheet ───────────────────────────────────────────────
 
   void _showRateSheet(String title, double current, String settingsKey) {
     final ctrl = TextEditingController(
-        text: current > 0 ? _fmtIndianStr(current.round()) : '');
+        text: current > 0 ? formatIndian(current.round().toString()) : '');
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -224,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
               keyboardType: TextInputType.number,
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'[\d,]')),
-                _IndianNumberFormatter(),
+                IndianNumberFormatter(),
               ],
               style: const TextStyle(
                   fontSize: 20, color: _navy, fontWeight: FontWeight.w600),
@@ -269,15 +202,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       final val = double.tryParse(raw);
                       if (val == null || val <= 0) return;
                       Navigator.of(ctx).pop();
-                      await _settings.upsertMany({
-                        settingsKey: (
-                          value: val.toStringAsFixed(2),
-                          type: 'double'
-                        ),
-                      });
+                      final isGold = settingsKey == 'gold_rate';
+                      // Append a new gold_rates row (rates are never updated
+                      // in place); keep the other rate at its current value.
+                      await GoldRatesRepository.instance.saveRates(
+                        goldRate: isGold ? val : _goldRate,
+                        pledgeRate: isGold ? _pledgeRate : val,
+                      );
                       if (mounted) {
                         setState(() {
-                          if (settingsKey == 'gold_rate') {
+                          if (isGold) {
                             _goldRate = val;
                           } else {
                             _pledgeRate = val;
@@ -317,7 +251,7 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: _bg,
       drawer: _buildDrawer(),
       appBar: AppBar(
-        toolbarHeight: 76,
+        toolbarHeight: 90,
         automaticallyImplyLeading: false,
         backgroundColor: _navy,
         elevation: 0,
@@ -328,52 +262,16 @@ class _HomeScreenState extends State<HomeScreen> {
           tooltip: 'Menu',
         ),
         centerTitle: true,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset(
-              'assets/images/cmb_logo.png',
-              height: 52,
-              width: 52,
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) =>
-                  const Icon(Icons.shield, color: _gold, size: 52),
-            ),
-            const SizedBox(width: 10),
-            const Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text(
-                  'CM Bank',
-                  style: TextStyle(
-                    color: _gold,
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 2.0,
-                    height: 1.1,
-                  ),
-                ),
-                
-              ],
-            ),
-          ],
+        title: Image.asset(
+          'assets/images/cmb_logo.png',
+          height: 88,
+          width: 88,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) =>
+              const Icon(Icons.shield, color: _gold, size: 88),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.lock_outline, color: _gold, size: 26),
-            onPressed: widget.onLock,
-            tooltip: 'Lock app',
-          ),
-          IconButton(
-            icon:
-                const Icon(Icons.settings_outlined, color: _gold, size: 26),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-            tooltip: 'Settings',
-          ),
+        actions: const [
+          SizedBox(width: 56),
         ],
       ),
       body: Column(
@@ -387,22 +285,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          // Warning banners
-          if (_showLowStorageWarning)
-            _warningBanner(
-              message:
-                  '⚠ Low storage: Free up space on your device.',
-              color: CMBColors.warningRed,
-              onDismiss: () =>
-                  setState(() => _showLowStorageWarning = false),
-            ),
-          if (_showDriveLowWarning)
-            _warningBanner(
-              message: '⚠ Google Drive storage low',
-              color: CMBColors.warningOrange,
-              onDismiss: () =>
-                  setState(() => _showDriveLowWarning = false),
-            ),
+          // Warning banners (above rates card)
+          ..._buildWarningBanners(),
           // Main scrollable content
           Expanded(
             child: RefreshIndicator(
@@ -420,13 +304,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       iconColor: _gold,
                       iconBg: const Color(0xFFFDF5E0),
                       borderAccent: _gold,
-                      title: 'New pledge',
+                      title: 'New Loan',
                       subtitle: 'Create a new gold loan',
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (_) => const NewPledgeScreen()),
-                      ),
+                      ).then((_) => _loadTodayAccounts()),
                     ),
                     const SizedBox(height: 13),
                     _actionCard(
@@ -434,13 +318,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       iconColor: const Color(0xFF2E7D32),
                       iconBg: const Color(0xFFEDF7ED),
                       borderAccent: const Color(0xFF2E7D32),
-                      title: 'Open pledge',
+                      title: 'Active Loans',
                       subtitle: 'Search and manage active pledges',
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (_) => const OpenPledgeScreen()),
-                      ),
+                      ).then((_) => _loadTodayAccounts()),
                     ),
                     const SizedBox(height: 13),
                     _actionCard(
@@ -448,7 +332,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       iconColor: _navy,
                       iconBg: const Color(0xFFEEF0F8),
                       borderAccent: _navy,
-                      title: 'Interest calculator',
+                      title: 'Interest Calculator',
                       subtitle: 'Calculate and save interest',
                       onTap: () => Navigator.push(
                         context,
@@ -465,17 +349,89 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+          _photoRestoreBanner(),
         ],
       ),
     );
   }
 
-  // ─── Warning banner ───────────────────────────────────────────────────────
+  // ─── Photo restore banner (Part 5B) ───────────────────────────────────────
+
+  Widget _photoRestoreBanner() {
+    return ValueListenableBuilder<PhotoRestoreProgress?>(
+      valueListenable: PhotoBackupService.instance.restoreProgress,
+      builder: (context, progress, child) {
+        if (progress == null) return const SizedBox.shrink();
+        final label = progress.total > 0
+            ? 'Restoring photos… ${progress.done} of ${progress.total} complete'
+            : 'Restoring photos in background…';
+        return Container(
+          width: double.infinity,
+          color: _navy,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: _gold),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(label,
+                    style: const TextStyle(
+                        color: CMBColors.textOnNavySmall, fontSize: 12.5)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ─── Warning banners ──────────────────────────────────────────────────────
+
+  List<Widget> _buildWarningBanners() {
+    final s = _status;
+    if (s == null) return const [];
+    final banners = <Widget>[];
+
+    // Device storage: critical (red, non-dismissable) overrides low (yellow).
+    if (s.deviceStorageCritical) {
+      banners.add(_warningBanner(
+        message:
+            '⚠ Critical: Very low storage. App may stop working correctly.',
+        color: CMBColors.warningRed,
+        onDismiss: null,
+      ));
+    } else if (s.deviceStorageLow && !_lowStorageDismissed) {
+      final mb = s.deviceFreeMb?.round() ?? 0;
+      banners.add(_warningBanner(
+        message:
+            '⚠ Low storage: $mb MB remaining. Free up space to prevent issues.',
+        color: CMBColors.ageingYellow,
+        onDismiss: () => setState(() => _lowStorageDismissed = true),
+      ));
+    }
+
+    // Drive storage low (orange, dismissable).
+    if (s.driveStorageLow && !_driveLowDismissed) {
+      banners.add(_warningBanner(
+        message:
+            '⚠ Google Drive storage low. Backups may fail soon. Free up Drive space.',
+        color: CMBColors.warningOrange,
+        onDismiss: () => setState(() => _driveLowDismissed = true),
+      ));
+    }
+
+    return banners;
+  }
 
   Widget _warningBanner({
     required String message,
     required Color color,
-    required VoidCallback onDismiss,
+    VoidCallback? onDismiss,
   }) {
     return Container(
       color: color,
@@ -489,13 +445,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontSize: 13,
                     fontWeight: FontWeight.w500)),
           ),
-          GestureDetector(
-            onTap: onDismiss,
-            child: const Padding(
-              padding: EdgeInsets.only(left: 8),
-              child: Icon(Icons.close, color: Colors.white, size: 20),
+          if (onDismiss != null)
+            GestureDetector(
+              onTap: onDismiss,
+              child: const Padding(
+                padding: EdgeInsets.only(left: 8),
+                child: Icon(Icons.close, color: Colors.white, size: 20),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -590,7 +547,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(fontSize: 12, color: _tSec)),
               const SizedBox(height: 2),
               Text(
-                value > 0 ? '${_fmtRupee(value)}/g' : 'Not set',
+                value > 0 ? '${money(value)}/g' : 'Not set',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -684,10 +641,12 @@ class _HomeScreenState extends State<HomeScreen> {
         '${now.month.toString().padLeft(2, '0')}/${now.year}';
 
     return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const DailyAccountsScreen()),
-      ),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const DailyAccountsScreen()),
+        ).then((_) => _loadTodayAccounts());
+      },
       child: Container(
         decoration: BoxDecoration(
           color: _navy,
@@ -735,7 +694,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 14),
             Center(
               child: Text(
-                '→ Tap to open daily accounts',
+                '→ Tap to open cash book',
                 style: TextStyle(
                     fontSize: 12,
                     color: _gold.withValues(alpha: 0.6),
@@ -774,7 +733,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            _fmtRupee(value),
+            money(value),
             style: const TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w700,
@@ -789,74 +748,106 @@ class _HomeScreenState extends State<HomeScreen> {
   // ─── Backup status bar ───────────────────────────────────────────────────
 
   Widget _backupBar() {
-    final overdue = _lastBackupAt == null ||
-        DateTime.now()
-                .difference(
-                    DateTime.tryParse(_lastBackupAt!) ?? DateTime(2000))
-                .inHours >
-            24;
-    final dbDot   = overdue ? Colors.red : Colors.green;
-    final dbColor = overdue ? Colors.red : const Color(0xFF388E3C);
-    final dbLabel = _lastBackupAt != null
-        ? 'Last backup: ${_fmtBackupTime(_lastBackupAt!)}'
-        : 'Never backed up';
+    final s = _status;
+
+    // Row 1 — database backup.
+    Color dbDot;
+    Color dbColor;
+    String dbLabel;
+    if (s == null) {
+      dbDot = Colors.grey;
+      dbColor = _tSec;
+      dbLabel = 'Backup status…';
+    } else if (s.lastBackupFailed) {
+      dbDot = Colors.red;
+      dbColor = Colors.red;
+      dbLabel = s.lastDriveBackupFailedAt != null
+          ? 'Last backup failed ${_hm(s.lastDriveBackupFailedAt!)}'
+          : 'Last backup failed';
+    } else if (s.lastDriveBackup != null) {
+      dbDot = Colors.green;
+      dbColor = const Color(0xFF388E3C);
+      dbLabel = 'Last backup: ${formatBackupTime(s.lastDriveBackup)}';
+    } else {
+      dbDot = Colors.red;
+      dbColor = Colors.red;
+      dbLabel = 'Never backed up';
+    }
+
+    // Row 2 — photo sync.
+    Color photoDot;
+    Color photoColor;
+    String photoLabel;
+    IconData photoIcon;
+    if (s == null || s.totalPhotos == 0) {
+      photoDot = Colors.grey;
+      photoColor = _tSec;
+      photoLabel = 'No photos to sync';
+      photoIcon = Icons.cloud_off;
+    } else if (s.pendingPhotos > 0) {
+      photoDot = CMBColors.warningOrange;
+      photoColor = CMBColors.warningOrange;
+      photoLabel = '${s.pendingPhotos} photos pending sync';
+      photoIcon = Icons.cloud_upload;
+    } else {
+      photoDot = Colors.green;
+      photoColor = const Color(0xFF388E3C);
+      photoLabel = 'Photos synced ${formatBackupDate(s.lastPhotoBackup)}';
+      photoIcon = Icons.cloud_done;
+    }
 
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const AdminScreen()),
-      ),
+      ).then((_) => _loadBackupStatus()),
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _gdBorder, width: 1),
         ),
-        child: Row(
+        child: Column(
           children: [
-            Expanded(
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                        color: dbDot, shape: BoxShape.circle),
-                  ),
-                  const SizedBox(width: 7),
-                  Flexible(
-                    child: Text(dbLabel,
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: dbColor,
-                            fontWeight: FontWeight.w500)),
-                  ),
-                ],
-              ),
+            _backupRow(Icons.backup, dbDot, dbColor, dbLabel),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Divider(height: 1, color: Color(0xFFE0E0E0)),
             ),
-            Container(
-              width: 1,
-              height: 18,
-              color: const Color(0xFFE0E0E0),
-              margin: const EdgeInsets.symmetric(horizontal: 10),
-            ),
-            const Row(
-              children: [
-                Icon(Icons.cloud_done, color: Colors.green, size: 14),
-                SizedBox(width: 5),
-                Text('Photos synced',
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.green,
-                        fontWeight: FontWeight.w500)),
-              ],
-            ),
+            _backupRow(photoIcon, photoDot, photoColor, photoLabel),
           ],
         ),
       ),
     );
+  }
+
+  Widget _backupRow(IconData icon, Color dot, Color color, String label) {
+    return Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 8),
+        Icon(icon, color: color, size: 14),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11.5,
+                  color: color,
+                  fontWeight: FontWeight.w500)),
+        ),
+        const Icon(Icons.chevron_right, color: _tSec, size: 16),
+      ],
+    );
+  }
+
+  String _hm(DateTime dt) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(dt.hour)}:${two(dt.minute)}';
   }
 
   // ─── Drawer ──────────────────────────────────────────────────────────────
@@ -869,44 +860,28 @@ class _HomeScreenState extends State<HomeScreen> {
             color: _navy,
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(20, 52, 20, 20),
-            child: Row(
-              children: [
-                Image.asset(
-                  'assets/images/cmb_logo.png',
-                  height: 52,
-                  width: 52,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) =>
-                      const Icon(Icons.shield, color: _gold, size: 52),
-                ),
-                const SizedBox(width: 14),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('CM Bank',
-                        style: TextStyle(
-                            color: _gold,
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold)),
-                    Text('Gold Loan Management',
-                        style: TextStyle(
-                            color: CMBColors.textOnNavyMuted, fontSize: 13)),
-                  ],
-                ),
-              ],
+            child: Center(
+              child: Image.asset(
+                'assets/images/cmb_logo.png',
+                height: 80,
+                width: 80,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.shield, color: _gold, size: 80),
+              ),
             ),
           ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
-                _drawerItem(Icons.upload_file, 'Load Existing Pledge',
+                _drawerItem(Icons.upload_file, 'Add Existing Loan',
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (_) =>
                                 const LoadExistingPledgeScreen()))),
-                _drawerItem(Icons.archive, 'Closed Pledges',
+                _drawerItem(Icons.archive, 'Closed Loans',
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -914,13 +889,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                 const ClosedPledgesScreen()))),
                 _drawerItem(
                     Icons.account_balance_wallet,
-                    'Daily Accounts',
+                    'Cash Book',
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (_) =>
                                 const DailyAccountsScreen()))),
-                _drawerItem(Icons.balance, 'Gold Stock Register',
+                _drawerItem(Icons.balance, 'Stock Register',
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -931,17 +906,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         MaterialPageRoute(
                             builder: (_) =>
                                 const CustomerListScreen()))),
-                _drawerItem(Icons.admin_panel_settings, 'Admin Area',
+                _drawerItem(Icons.admin_panel_settings, 'Admin',
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (_) => const AdminScreen()))),
                 const Divider(height: 24),
-                _drawerItem(Icons.settings, 'Settings',
-                    () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const SettingsScreen()))),
                 ListTile(
                   leading: const Icon(Icons.lock, color: Colors.red),
                   title: const Text('Lock App',
@@ -974,55 +944,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ─── Indian number text formatter ─────────────────────────────────────────────
-
-class _IndianNumberFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    final digits = newValue.text.replaceAll(',', '');
-    if (digits.isEmpty) return newValue.copyWith(text: '');
-    final n = int.tryParse(digits);
-    if (n == null) return oldValue;
-    final formatted = _fmtIndianStr(n);
-    return newValue.copyWith(
-      text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
-    );
-  }
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 String _isoDate(DateTime dt) =>
     '${dt.year.toString().padLeft(4, '0')}-'
     '${dt.month.toString().padLeft(2, '0')}-'
     '${dt.day.toString().padLeft(2, '0')}';
-
-String _fmtIndianStr(int n) {
-  if (n == 0) return '0';
-  final s = n.toString();
-  if (s.length <= 3) return s;
-  final last3 = s.substring(s.length - 3);
-  final rest  = s.substring(0, s.length - 3);
-  final buf   = StringBuffer();
-  for (int i = 0; i < rest.length; i++) {
-    if (i > 0 && (rest.length - i) % 2 == 0) buf.write(',');
-    buf.write(rest[i]);
-  }
-  return '$buf,$last3';
-}
-
-String _fmtRupee(double amount) => '₹${_fmtIndianStr(amount.round().abs())}';
-
-String _fmtBackupTime(String iso) {
-  try {
-    final dt = DateTime.parse(iso).toLocal();
-    final d  = '${dt.day.toString().padLeft(2, '0')}/'
-        '${dt.month.toString().padLeft(2, '0')}/${dt.year}';
-    return '$d ${dt.hour.toString().padLeft(2, '0')}:'
-        '${dt.minute.toString().padLeft(2, '0')}';
-  } catch (_) {
-    return iso;
-  }
-}

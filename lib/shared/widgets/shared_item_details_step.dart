@@ -6,13 +6,19 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../features/admin/data/item_types_repository.dart';
+import '../../features/admin/data/purity_types_repository.dart';
 import 'flow_widgets.dart';
 
+// Fallbacks used only until the active lists load from the DB (item_types /
+// purity_types tables).
 const _kItemTypes = [
   'Necklace', 'Ring', 'Bangle', 'Earring', 'Bracelet',
   'Chain', 'Anklet', 'Coin', 'Bar', 'Pendant',
   'Waist Belt', 'Nose Ring', 'Other',
 ];
+
+const _kPurityTypes = ['24K', '22K', '18K', 'Other'];
 
 // ─── Data classes ─────────────────────────────────────────────────────────────
 
@@ -21,6 +27,7 @@ class ItemEntryData {
     required this.itemType,
     required this.grossWeight,
     required this.netWeight,
+    this.quantity = 1,
     this.notes,
     this.purity,
   });
@@ -28,6 +35,7 @@ class ItemEntryData {
   final String itemType;
   final double grossWeight;
   final double netWeight;
+  final int quantity;
   final String? notes;
   final String? purity;
 }
@@ -46,16 +54,22 @@ class _ItemEntry {
   final netCtrl = TextEditingController();
   final notesCtrl = TextEditingController();
   final purityCtrl = TextEditingController();
+  final qtyCtrl = TextEditingController(text: '1');
   String itemType = 'Other';
 
   double get grossWeight => double.tryParse(grossCtrl.text) ?? 0;
   double get netWeight => double.tryParse(netCtrl.text) ?? 0;
+  int get quantity {
+    final n = int.tryParse(qtyCtrl.text.trim()) ?? 1;
+    return n < 1 ? 1 : n;
+  }
 
   void dispose() {
     grossCtrl.dispose();
     netCtrl.dispose();
     notesCtrl.dispose();
     purityCtrl.dispose();
+    qtyCtrl.dispose();
   }
 }
 
@@ -83,10 +97,29 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
   final _imagePicker = ImagePicker();
   late List<_ItemEntry> _items;
   List<File> _itemPhotos = [];
+  List<String> _itemTypes = _kItemTypes;
+  List<String> _purityTypes = _kPurityTypes;
+
+  Future<void> _loadLookups() async {
+    try {
+      final items = await ItemTypesRepository.instance.getActiveItemTypes();
+      final purities =
+          await PurityTypesRepository.instance.getActivePurityTypes();
+      if (mounted) {
+        setState(() {
+          if (items.isNotEmpty) _itemTypes = items;
+          if (purities.isNotEmpty) _purityTypes = purities;
+        });
+      }
+    } catch (_) {
+      // Keep fallbacks on error.
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _loadLookups();
     final d = widget.initialData;
     if (d != null && d.items.isNotEmpty) {
       _items = d.items.map((e) {
@@ -96,6 +129,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
         entry.netCtrl.text = e.netWeight > 0 ? e.netWeight.toString() : '';
         entry.notesCtrl.text = e.notes ?? '';
         entry.purityCtrl.text = e.purity ?? '';
+        entry.qtyCtrl.text = '${e.quantity < 1 ? 1 : e.quantity}';
         entry.itemType = e.itemType;
         return entry;
       }).toList();
@@ -128,6 +162,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                 itemType: e.itemType,
                 grossWeight: e.grossWeight,
                 netWeight: e.netWeight,
+                quantity: e.quantity,
                 notes: e.notesCtrl.text.trim().isEmpty
                     ? null
                     : e.notesCtrl.text.trim(),
@@ -298,17 +333,35 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             ],
           ),
           const SizedBox(height: 10),
-          DropdownButtonFormField<String>(
-            initialValue: entry.itemType,
-            decoration: const InputDecoration(
-                labelText: 'Item Type', isDense: true),
-            items: _kItemTypes
-                .map((t) => DropdownMenuItem(
-                    value: t,
-                    child: Text(t, style: const TextStyle(fontSize: 16))))
-                .toList(),
-            onChanged: (v) =>
-                setState(() => entry.itemType = v ?? 'Other'),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 3,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _itemTypes.contains(entry.itemType)
+                      ? entry.itemType
+                      : null,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Item Type', isDense: true),
+                  items: _typeItems(entry.itemType)
+                      .map((t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 16))))
+                      .toList(),
+                  onChanged: (v) =>
+                      setState(() => entry.itemType = v ?? 'Other'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 1,
+                child: _quantityDropdown(entry),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           Row(
@@ -319,12 +372,18 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             ],
           ),
           const SizedBox(height: 6),
-          TextField(
-            controller: entry.purityCtrl,
-            style: const TextStyle(fontSize: 16),
+          DropdownButtonFormField<String>(
+            initialValue: _purityValue(entry.purityCtrl.text),
+            isExpanded: true,
             decoration: const InputDecoration(
-                labelText: 'Gold Purity (optional, e.g. 22K, 18K)',
-                isDense: true),
+                labelText: 'Gold Purity (optional)', isDense: true),
+            items: _purityItems(entry.purityCtrl.text)
+                .map((t) => DropdownMenuItem(
+                    value: t,
+                    child: Text(t, style: const TextStyle(fontSize: 16))))
+                .toList(),
+            onChanged: (v) =>
+                setState(() => entry.purityCtrl.text = v ?? ''),
           ),
           const SizedBox(height: 6),
           TextField(
@@ -333,9 +392,33 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             decoration: const InputDecoration(
                 labelText: 'Notes (optional)', isDense: true),
           ),
+          const SizedBox(height: 8),
+          Text(
+            'Qty: ${entry.quantity}   •   Net: ${entry.netWeight.toStringAsFixed(2)} g'
+            '${entry.purityCtrl.text.trim().isEmpty ? '' : '   •   ${entry.purityCtrl.text.trim()}'}',
+            style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: FlowColors.medText),
+          ),
         ],
       ),
     );
+  }
+
+  // Ensure the current value is always present in the dropdown items so a
+  // value loaded from an older record never crashes the DropdownButtonFormField.
+  List<String> _typeItems(String current) {
+    if (current.isEmpty || _itemTypes.contains(current)) return _itemTypes;
+    return [current, ..._itemTypes];
+  }
+
+  String? _purityValue(String current) =>
+      current.isNotEmpty && _purityTypes.contains(current) ? current : null;
+
+  List<String> _purityItems(String current) {
+    if (current.isEmpty || _purityTypes.contains(current)) return _purityTypes;
+    return [current, ..._purityTypes];
   }
 
   Widget _decimalField(String label, TextEditingController ctrl) {
@@ -351,6 +434,22 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
         onChanged: (_) => setState(() {}),
         decoration: InputDecoration(labelText: label, isDense: true),
       ),
+    );
+  }
+
+  Widget _quantityDropdown(_ItemEntry entry) {
+    final q = entry.quantity;
+    final current = q < 1 ? 1 : (q > 9 ? 9 : q);
+    return DropdownButtonFormField<int>(
+      initialValue: current,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: 'Qty', isDense: true),
+      items: List.generate(9, (i) => i + 1)
+          .map((n) => DropdownMenuItem(
+              value: n,
+              child: Text('$n', style: const TextStyle(fontSize: 16))))
+          .toList(),
+      onChanged: (v) => setState(() => entry.qtyCtrl.text = '${v ?? 1}'),
     );
   }
 

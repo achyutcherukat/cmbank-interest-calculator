@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../../../features/pledges/presentation/open_pledge_screen.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../data/admin_repository.dart';
+import 'activity_drill_down_screen.dart';
 import 'ageing_drill_down_screen.dart';
+import 'gold_account_balance_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -15,11 +17,13 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with WidgetsBindingObserver {
   AdminOverview? _overview;
-  TodaySummary? _today;
+  TodayActivity? _today;
   List<AgeingBucket> _ageing = [];
-  InterestSummary? _interest;
+  GoldAccountSummary? _gold;
   BusinessHealth? _health;
   bool _loading = true;
+  DateTime _activityDate = DateTime.now();
+  DateTime _firstPledgeDate = DateTime(2000);
 
   @override
   void initState() {
@@ -50,24 +54,121 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       final results = await Future.wait([
         AdminRepository.instance.getOverview(),
-        AdminRepository.instance.getTodaySummary(),
+        AdminRepository.instance.getTodayActivity(),
         AdminRepository.instance.getAgeingBuckets(),
-        AdminRepository.instance.getInterestSummary(),
+        AdminRepository.instance.getGoldAccountSummary(),
         AdminRepository.instance.getBusinessHealth(),
+        AdminRepository.instance.getFirstPledgeDate(),
       ]);
       if (mounted) {
         setState(() {
           _overview = results[0] as AdminOverview;
-          _today = results[1] as TodaySummary;
+          _today = results[1] as TodayActivity;
           _ageing = results[2] as List<AgeingBucket>;
-          _interest = results[3] as InterestSummary;
+          _gold = results[3] as GoldAccountSummary;
           _health = results[4] as BusinessHealth;
+          _firstPledgeDate = results[5] as DateTime;
           _loading = false;
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadActivity() async {
+    final result = await AdminRepository.instance
+        .getTodayActivity(date: _activityDate);
+    if (mounted) setState(() => _today = result);
+  }
+
+  Future<void> _pickActivityDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _activityDate,
+      firstDate: _firstPledgeDate,
+      lastDate: DateTime.now(),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _activityDate = picked);
+    _loadActivity();
+  }
+
+  Widget _activityDateHeader() {
+    final today = DateTime.now();
+    final isToday = _activityDate.year == today.year &&
+        _activityDate.month == today.month &&
+        _activityDate.day == today.day;
+    final isFirst = !_activityDate.isAfter(_firstPledgeDate);
+
+    final label = isToday
+        ? "TODAY'S ACTIVITY"
+        : "${_activityDate.day.toString().padLeft(2, '0')}/"
+              "${_activityDate.month.toString().padLeft(2, '0')}/"
+              "${_activityDate.year}  ACTIVITY";
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: FlowColors.primary,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(
+              Icons.chevron_left,
+              color: isFirst ? Colors.transparent : FlowColors.goldRich,
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: isFirst
+                ? null
+                : () {
+                    setState(() {
+                      _activityDate =
+                          _activityDate.subtract(const Duration(days: 1));
+                    });
+                    _loadActivity();
+                  },
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: _pickActivityDate,
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                  color: FlowColors.goldRich,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: Icon(
+              Icons.chevron_right,
+              color: isToday ? Colors.transparent : FlowColors.goldRich,
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: isToday
+                ? null
+                : () {
+                    setState(() {
+                      _activityDate =
+                          _activityDate.add(const Duration(days: 1));
+                    });
+                    _loadActivity();
+                  },
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -95,9 +196,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 40),
                 children: [
                   _overviewGrid(),
-                  _todayCard(),
+                  _todayActivitySection(),
+                  _goldAccountSection(),
                   _ageingSection(),
-                  _interestCard(),
                   _healthSection(),
                 ],
               ),
@@ -112,7 +213,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const FlowSectionTitle('Overview'),
+        _navyHeader('OVERVIEW'),
+        _migrationBanner(),
         Row(
           children: [
             Expanded(
@@ -189,32 +291,302 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // ── Today's Summary ──────────────────────────────────────────────────────────
+  // ── Migration banner ─────────────────────────────────────────────────────────
 
-  Widget _todayCard() {
+  Widget _migrationBanner() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 10, bottom: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF59E0B),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              color: Colors.white, size: 28),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Data migration in progress',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Dashboard figures reflect only records entered so far. Values will be fully accurate once all physical records have been migrated to this system.',
+                  style: TextStyle(fontSize: 13, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Today's Activity (Change 2) ──────────────────────────────────────────────
+
+  Widget _todayActivitySection() {
     final t = _today;
-    final now = DateTime.now();
-    final dateLabel =
-        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
-    final net = t?.netCashMovement ?? 0;
-    final netColor = net >= 0 ? FlowColors.green : FlowColors.red;
-    final netStr = '${net >= 0 ? '+' : ''}${money(net)}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _activityDateHeader(),
+        Row(
+          children: [
+            Expanded(
+              child: _activityTile(
+                icon: Icons.volunteer_activism,
+                label: 'New Loans',
+                count: '${t?.newCount ?? 0}',
+                amount: money(t?.newAmount ?? 0),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ActivityDrillDownScreen(
+                      type: ActivityDrillType.newLoans,
+                      date: _activityDate,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _activityTile(
+                icon: Icons.task_alt,
+                label: 'Closed Loans',
+                count: '${t?.closedCount ?? 0}',
+                amount: money(t?.closedAmount ?? 0),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ActivityDrillDownScreen(
+                      type: ActivityDrillType.closedLoans,
+                      date: _activityDate,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _activityTile(
+                icon: Icons.currency_rupee,
+                label: 'Interest Collected',
+                count: money(t?.interestCollected ?? 0),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ActivityDrillDownScreen(
+                      type: ActivityDrillType.interestCollected,
+                      date: _activityDate,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _activityTile(
+                icon: Icons.groups,
+                label: 'Customers Today',
+                count: '${t?.activeCustomers ?? 0}',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ActivityDrillDownScreen(
+                      type: ActivityDrillType.customers,
+                      date: _activityDate,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
 
-    return FlowCard(
-      backgroundColor: FlowColors.accent,
-      header: "TODAY — $dateLabel",
+  /// White card, navy border (40% opacity), large navy count, gold amount,
+  /// gold icon top-right.
+  Widget _activityTile({
+    required IconData icon,
+    required String label,
+    required String count,
+    String? amount,
+    VoidCallback? onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: FlowColors.primary.withAlpha(102), width: 0.8),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x0D000000), blurRadius: 6, offset: Offset(0, 2))
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _row('New Pledges',
-              '${t?.newPledgesCount ?? 0}  (${money(t?.newPledgesAmount ?? 0)})'),
-          _row('Closed Pledges',
-              '${t?.closedPledgesCount ?? 0}  (${money(t?.closedPledgesAmount ?? 0)})'),
-          _row('Interest Collected', money(t?.interestCollected ?? 0)),
-          _row('Net Cash Movement', netStr, valueColor: netColor,
-              isLast: true),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(count,
+                    style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: FlowColors.primary)),
+              ),
+              Icon(icon, color: FlowColors.goldRich, size: 26),
+            ],
+          ),
+          if (amount != null) ...[
+            const SizedBox(height: 2),
+            Text(amount,
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: FlowColors.goldRich)),
+          ],
+          const SizedBox(height: 6),
+          Text(label,
+              style: const TextStyle(fontSize: 15, color: FlowColors.medText)),
         ],
       ),
+    ),
+    );
+  }
+
+  // ── Gold Account Balance (Change 4) ──────────────────────────────────────────
+
+  Widget _goldAccountSection() {
+    final g = _gold;
+    final current = g?.currentBalance ?? 0;
+    final yesterday = g?.yesterdayBalance ?? 0;
+    final now = DateTime.now();
+    final dateLabel =
+        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
+
+    IconData trendIcon;
+    Color trendColor;
+    if (current > yesterday) {
+      trendIcon = Icons.arrow_upward;
+      trendColor = FlowColors.green;
+    } else if (current < yesterday) {
+      trendIcon = Icons.arrow_downward;
+      trendColor = FlowColors.red;
+    } else {
+      trendIcon = Icons.remove;
+      trendColor = Colors.black38;
+    }
+    final diff = (current - yesterday).abs();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _navyHeader('GOLD ACCOUNT BALANCE'),
+        GestureDetector(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const GoldAccountBalanceScreen()),
+          ),
+          child: Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border:
+                  Border.all(color: FlowColors.primary.withAlpha(102), width: 0.8),
+              boxShadow: const [
+                BoxShadow(
+                    color: Color(0x0D000000),
+                    blurRadius: 6,
+                    offset: Offset(0, 2))
+              ],
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Current Balance',
+                          style: TextStyle(
+                              fontSize: 15, color: FlowColors.medText)),
+                      const SizedBox(height: 4),
+                      Text(money(current),
+                          style: const TextStyle(
+                              fontSize: 30,
+                              fontWeight: FontWeight.bold,
+                              color: FlowColors.primary)),
+                      const SizedBox(height: 4),
+                      Text('as of $dateLabel',
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.black54)),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Icon(trendIcon, color: trendColor, size: 28),
+                    if (diff > 0)
+                      Text(money(diff),
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: trendColor)),
+                    const SizedBox(height: 6),
+                    const Icon(Icons.chevron_right,
+                        color: Colors.black38, size: 20),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _navyHeader(String text) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: FlowColors.primary,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(text,
+          style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.8,
+              color: FlowColors.goldRich)),
     );
   }
 
@@ -237,7 +609,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const FlowSectionTitle('Pledge Ageing'),
+        _navyHeader('PLEDGE AGEING'),
         ..._ageing.asMap().entries.map((e) {
           final i = e.key;
           final b = e.value;
@@ -320,88 +692,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // ── Interest Summary ─────────────────────────────────────────────────────────
-
-  Widget _interestCard() {
-    final s = _interest;
-    final now = DateTime.now();
-    final fyStart = now.month >= 4 ? now.year : now.year - 1;
-
-    return FlowCard(
-      header: 'INTEREST SUMMARY',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _row('This Month', money(s?.thisMonth ?? 0)),
-          _row('Last Month', money(s?.lastMonth ?? 0)),
-          _row('FY $fyStart–${(fyStart + 1).toString().substring(2)}',
-              money(s?.thisYear ?? 0),
-              isLast: true),
-        ],
-      ),
-    );
-  }
-
   // ── Business Health ──────────────────────────────────────────────────────────
 
   Widget _healthSection() {
     final h = _health;
     if (h == null) return const SizedBox.shrink();
 
-    final backupBad = h.daysSinceBackup > 1;
-    final backupLabel = h.lastBackupAt == null
-        ? 'Never'
-        : isoToDisplay(h.lastBackupAt!.substring(0, 10));
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const FlowSectionTitle('Attention Required'),
-
-        // Backup alert
-        Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            color: backupBad ? FlowColors.redLight : FlowColors.greenLight,
-            border: Border.all(
-                color: backupBad ? FlowColors.red : FlowColors.green,
-                width: 1.5),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                backupBad ? Icons.cloud_off : Icons.cloud_done,
-                color: backupBad ? FlowColors.red : FlowColors.green,
-                size: 24,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      backupBad
-                          ? 'Last backup: $backupLabel — ${h.daysSinceBackup} day(s) ago'
-                          : 'Last backup: $backupLabel',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: backupBad
-                              ? FlowColors.red
-                              : FlowColors.green),
-                    ),
-                    if (backupBad)
-                      const Text('Backup overdue — please backup now',
-                          style:
-                              TextStyle(fontSize: 13, color: FlowColors.red)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+        _navyHeader('ATTENTION REQUIRED'),
 
         // Top 5 largest
         if (h.topLargest.isNotEmpty) ...[
@@ -438,8 +738,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   Widget _healthPledgeRow(Map<String, dynamic> p, {bool isLast = false}) {
     final days = (p['days_old'] as int?) ?? 0;
-    final months = days ~/ 30;
-    final ageStr = months > 0 ? '$months mo' : '$days d';
+    final ageStr = formatPledgeAge(days);
     final name = p['customer_name'] as String?;
 
     return GestureDetector(
@@ -500,16 +799,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
-
-  Widget _row(String label, String value,
-      {Color? valueColor, bool isLast = false}) {
-    return DetailRow(
-      label: label,
-      value: value,
-      valueColor: valueColor ?? FlowColors.primary,
-      isLast: isLast,
-    );
-  }
 
   Widget _subTitle(String text) {
     return Padding(

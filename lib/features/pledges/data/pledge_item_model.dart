@@ -1,50 +1,44 @@
-import 'dart:convert';
-
+/// One gold item belonging to a pledge (`pledge_items` table).
+///
+/// Photos are no longer stored per item — gold photos now live at the pledge
+/// level (`pledges.gold_photo_paths`). The `stone_weight` column has been
+/// dropped as well.
 class PledgeItemModel {
   const PledgeItemModel({
     this.id,
     required this.pledgeId,
-    this.itemType = 'other',
+    this.itemType = 'Other',
+    this.description,
+    this.quantity = 1,
     this.grossWeight = 0.0,
     required this.netWeight,
     this.purity = '',
     this.notes,
-    this.photoPaths = const [],
     required this.createdAt,
   });
 
   final int? id;
   final int pledgeId;
-  final String itemType;
-  final double grossWeight;
-  final double netWeight;   // DB: net_weight
-  final String purity;
-  final String? notes;      // DB: notes / description
-  final List<String> photoPaths; // DB: photo_paths (JSON array)
+  final String itemType; // DB: item_type (value from item_types table)
+  final String? description; // DB: description
+  final int quantity; // DB: quantity
+  final double grossWeight; // DB: gross_weight
+  final double netWeight; // DB: net_weight
+  final String purity; // DB: purity (value from purity_types table)
+  final String? notes; // DB: notes
   final String createdAt;
 
   factory PledgeItemModel.fromMap(Map<String, dynamic> map) {
-    List<String> paths = [];
-    final pathsJson = map['photo_paths'] as String?;
-    if (pathsJson != null && pathsJson.isNotEmpty) {
-      try {
-        paths = (jsonDecode(pathsJson) as List).cast<String>();
-      } catch (_) {}
-    }
-    if (paths.isEmpty) {
-      final single = map['photo_path'] as String?;
-      if (single != null && single.isNotEmpty) paths = [single];
-    }
-
     return PledgeItemModel(
       id: map['id'] as int?,
       pledgeId: map['pledge_id'] as int? ?? 0,
-      itemType: map['item_type'] as String? ?? 'other',
+      itemType: map['item_type'] as String? ?? 'Other',
+      description: map['description'] as String?,
+      quantity: (map['quantity'] as int?) ?? 1,
       grossWeight: (map['gross_weight'] as num?)?.toDouble() ?? 0.0,
       netWeight: (map['net_weight'] as num?)?.toDouble() ?? 0.0,
       purity: map['purity'] as String? ?? '',
-      notes: (map['notes'] as String?) ?? (map['description'] as String?),
-      photoPaths: paths,
+      notes: map['notes'] as String?,
       createdAt: map['created_at'] as String? ?? '',
     );
   }
@@ -54,14 +48,11 @@ class PledgeItemModel {
       if (id != null) 'id': id,
       'pledge_id': pledgeId,
       'item_type': itemType,
-      'description': notes,
-      'quantity': 1,
+      'description': description,
+      'quantity': quantity,
       'gross_weight': grossWeight,
-      'stone_weight': 0.0,
       'net_weight': netWeight,
       'purity': purity,
-      'photo_path': photoPaths.isNotEmpty ? photoPaths.first : null,
-      'photo_paths': jsonEncode(photoPaths),
       'notes': notes,
       'created_at': createdAt,
     };

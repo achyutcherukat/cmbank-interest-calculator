@@ -83,7 +83,7 @@ class _AdminScreenState extends State<AdminScreen> {
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
         foregroundColor: FlowColors.goldRich,
-        title: const Text('Admin Area',
+        title: const Text('Admin',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
       ),
       body: Center(

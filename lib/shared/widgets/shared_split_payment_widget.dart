@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'flow_widgets.dart';
 
@@ -31,13 +30,13 @@ class SharedSplitPaymentWidgetState
       ? widget.total
       : _mode == 'upi'
           ? 0
-          : (double.tryParse(_cashCtrl.text) ?? 0);
+          : (double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0);
 
   double get upiAmount => _mode == 'upi'
       ? widget.total
       : _mode == 'cash'
           ? 0
-          : (double.tryParse(_upiCtrl.text) ?? 0);
+          : (double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0);
 
   @override
   void initState() {
@@ -51,9 +50,9 @@ class SharedSplitPaymentWidgetState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.total != widget.total && _mode == 'split') {
       _updating = true;
-      final cash = double.tryParse(_cashCtrl.text) ?? 0;
+      final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
       final rem = widget.total - cash;
-      _upiCtrl.text = rem >= 0 ? rem.round().toString() : '0';
+      _upiCtrl.text = rem >= 0 ? formatIndian(rem.round().toString()) : '0';
       _updating = false;
     }
   }
@@ -68,9 +67,9 @@ class SharedSplitPaymentWidgetState
   void _onCashChanged() {
     if (_updating || _mode != 'split') return;
     _updating = true;
-    final cash = double.tryParse(_cashCtrl.text) ?? 0;
+    final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
     final rem = widget.total - cash;
-    if (rem >= 0) _upiCtrl.text = rem.round().toString();
+    if (rem >= 0) _upiCtrl.text = formatIndian(rem.round().toString());
     _updating = false;
     setState(() {});
   }
@@ -78,17 +77,17 @@ class SharedSplitPaymentWidgetState
   void _onUpiChanged() {
     if (_updating || _mode != 'split') return;
     _updating = true;
-    final upi = double.tryParse(_upiCtrl.text) ?? 0;
+    final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
     final rem = widget.total - upi;
-    if (rem >= 0) _cashCtrl.text = rem.round().toString();
+    if (rem >= 0) _cashCtrl.text = formatIndian(rem.round().toString());
     _updating = false;
     setState(() {});
   }
 
   String? validate() {
     if (_mode != 'split') return null;
-    final total = (double.tryParse(_cashCtrl.text) ?? 0) +
-        (double.tryParse(_upiCtrl.text) ?? 0);
+    final total = (double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0) +
+        (double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0);
     if ((total - widget.total).abs() >= 0.5) {
       return 'Cash + UPI must equal ${money(widget.total.round().toDouble())}';
     }
@@ -97,8 +96,8 @@ class SharedSplitPaymentWidgetState
 
   @override
   Widget build(BuildContext context) {
-    final splitCash = double.tryParse(_cashCtrl.text) ?? 0;
-    final splitUpi = double.tryParse(_upiCtrl.text) ?? 0;
+    final splitCash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
+    final splitUpi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
     final splitTotal = splitCash + splitUpi;
     final splitOk = (splitTotal - widget.total).abs() < 0.5;
 
@@ -221,7 +220,7 @@ class SharedSplitPaymentWidgetState
       child: TextField(
         controller: ctrl,
         keyboardType: TextInputType.number,
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        inputFormatters: [IndianNumberFormatter()],
         style: const TextStyle(fontSize: 18),
         decoration: InputDecoration(labelText: label, prefixText: '₹ '),
       ),

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
-import '../../pledges/data/pledge_repository.dart';
+import '../../../shared/widgets/pledge_id_search_popup.dart';
+import '../../pledges/presentation/load_existing_pledge_screen.dart';
+import '../../pledges/presentation/open_pledge_screen.dart';
 import '../data/calc_history_repository.dart';
 import '../data/interest_calculator.dart';
 import 'history_screen.dart';
@@ -49,7 +50,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   }
 
   Future<void> _loadInterestRate() async {
-    final val = await _settingsRepository.getString('default_interest_rate');
+    final val = await _settingsRepository.getString('interest_rate') ??
+        await _settingsRepository.getString('default_interest_rate');
     if (mounted) {
       setState(() => _interestRate = double.tryParse(val ?? '') ?? 18.0);
     }
@@ -131,7 +133,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   }
 
   Future<void> _calculate() async {
-    final principal = double.tryParse(_principalController.text.trim());
+    final principal = double.tryParse(
+        _principalController.text.trim().replaceAll(',', ''));
     if (principal == null || principal <= 0) {
       _showError('Please enter a valid principal amount.');
       return;
@@ -166,291 +169,45 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     });
   }
 
-  // ─── Close Pledge Dialog ──────────────────────────────────────────────────
+  // ─── Close Pledge (reusable search popup) ─────────────────────────────────
 
-  void _showClosePledgeDialog() {
-    final pledgeNoCtrl = TextEditingController();
-    String? selectedMode;
-    String? dialogError;
-    bool isSaving = false;
-
-    final principal = double.tryParse(_principalController.text.trim()) ?? 0;
-    final fromISO =
-        '${_fromDate!.year.toString().padLeft(4, '0')}-${_fromDate!.month.toString().padLeft(2, '0')}-${_fromDate!.day.toString().padLeft(2, '0')}';
-    final toISO =
-        '${_toDate!.year.toString().padLeft(4, '0')}-${_toDate!.month.toString().padLeft(2, '0')}-${_toDate!.day.toString().padLeft(2, '0')}';
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) {
-          return AlertDialog(
-            title: const Text('Close Pledge',
-                style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: FlowColors.primary)),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Calculation summary inside dialog
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: FlowColors.accent,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: FlowColors.primaryLight),
-                    ),
-                    child: Column(
-                      children: [
-                        _dlgRow('Principal', money(principal)),
-                        const Divider(height: 16),
-                        _dlgRow('Interest', money(_simpleInterest)),
-                        const Divider(height: 16),
-                        _dlgRow('Total', money(_totalAmount), bold: true),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Pledge Number *',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87)),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: pledgeNoCtrl,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style: const TextStyle(fontSize: 20),
-                    decoration: InputDecoration(
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onChanged: (_) {
-                      if (dialogError != null) {
-                        setDialogState(() => dialogError = null);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Payment Received Via',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87)),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _modeButton(
-                          label: 'Cash',
-                          value: 'cash',
-                          selected: selectedMode == 'cash',
-                          onTap: () => setDialogState(() {
-                            selectedMode = 'cash';
-                            dialogError = null;
-                          }),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _modeButton(
-                          label: 'UPI',
-                          value: 'upi',
-                          selected: selectedMode == 'upi',
-                          onTap: () => setDialogState(() {
-                            selectedMode = 'upi';
-                            dialogError = null;
-                          }),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (dialogError != null) ...[
-                    const SizedBox(height: 12),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.error,
-                            color: Colors.red, size: 20),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            dialogError!,
-                            style: const TextStyle(
-                                color: Colors.red, fontSize: 14),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
+  /// Opens the reusable "Find Pledge" popup. A found *open* pledge opens its
+  /// detail screen (interest as of today); a not-in-system pledge routes to the
+  /// Load Existing Pledge screen pre-filled from the calculator, where staff
+  /// confirm a migrate-and-close (or migrate-and-renew).
+  void _openClosePledgeSearch() {
+    final principal = double.tryParse(
+            _principalController.text.trim().replaceAll(',', '')) ??
+        0;
+    showPledgeIdSearchPopup(
+      context,
+      contextDate: null,
+      prefilledAmount: principal,
+      prefilledOpenDate: _fromDate,
+      onPledgeFound: (pledge) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => PledgeDetailScreen(pledgeId: pledge.id!)),
+        );
+      },
+      onPledgeNotFound: (pledgeId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => LoadExistingPledgeScreen(
+              prefilledPledgeId: pledgeId,
+              prefilledAmount: principal,
+              prefilledOpenDate: _fromDate,
+              openDateEditable: true,
+              closeDate: DateTime.now(),
+              closeDateEditable: false,
+              sourceContext: 'calculator',
             ),
-            actions: [
-              TextButton(
-                onPressed: isSaving ? null : () => Navigator.pop(ctx),
-                child: const Text('Cancel',
-                    style: TextStyle(fontSize: 17, color: Colors.grey)),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: FlowColors.primary),
-                onPressed: isSaving
-                    ? null
-                    : () async {
-                        final no = pledgeNoCtrl.text.trim();
-                        if (no.isEmpty) {
-                          setDialogState(() =>
-                              dialogError = 'Pledge number is required.');
-                          return;
-                        }
-                        if (selectedMode == null) {
-                          setDialogState(() =>
-                              dialogError = 'Select Cash or UPI.');
-                          return;
-                        }
-
-                        setDialogState(() => isSaving = true);
-
-                        final existing = await PledgeRepository.instance
-                            .getPledgeByNumber(no);
-
-                        if (!ctx.mounted) return;
-
-                        if (existing != null) {
-                          final msg = existing.status == 'open'
-                              ? 'Pledge $no is currently open in the system. Please close it from the Open Pledge screen.'
-                              : 'Pledge $no is already closed in the system.';
-                          setDialogState(() {
-                            isSaving = false;
-                            dialogError = msg;
-                          });
-                          return;
-                        }
-
-                        // Not in DB — save as manual closed pledge
-                        try {
-                          await PledgeRepository.instance
-                              .createManualClosedPledge(
-                            pledgeNumber: no,
-                            pledgeDate: fromISO,
-                            closureDate: toISO,
-                            principal: principal,
-                            interest: _simpleInterest,
-                            total: _totalAmount,
-                            interestRate: _interestRate,
-                            paymentMode: selectedMode!,
-                          );
-
-                          if (!ctx.mounted) return;
-                          Navigator.pop(ctx);
-
-                          if (mounted) {
-                            _resetFields();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                    'Pledge $no closed. ${money(_totalAmount)} received via ${selectedMode == 'cash' ? 'Cash' : 'UPI'}.'),
-                                backgroundColor: FlowColors.green,
-                                duration: const Duration(seconds: 3),
-                              ),
-                            );
-                          }
-                        } catch (e) {
-                          if (!ctx.mounted) return;
-                          setDialogState(() {
-                            isSaving = false;
-                            dialogError = 'Error: $e';
-                          });
-                        }
-                      },
-                child: isSaving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: FlowColors.textOnNavyLarge),
-                      )
-                    : const Text('CONFIRM CLOSE',
-                        style: TextStyle(fontSize: 16, color: FlowColors.textOnNavySmall)),
-              ),
-            ],
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
-  }
-
-  Widget _dlgRow(String label, String value, {bool bold = false}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label,
-            style: const TextStyle(fontSize: 15, color: Colors.black54)),
-        Text(value,
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: bold ? FontWeight.bold : FontWeight.w600,
-                color: FlowColors.primary)),
-      ],
-    );
-  }
-
-  Widget _modeButton({
-    required String label,
-    required String value,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    Widget iconWidget = value == 'cash'
-        ? const Icon(Icons.payments, size: 18, color: FlowColors.primary)
-        : const Icon(Icons.qr_code_scanner, size: 18, color: FlowColors.primary);
-
-    return OutlinedButton(
-      onPressed: onTap,
-      style: OutlinedButton.styleFrom(
-        backgroundColor: selected ? FlowColors.accent : Colors.white,
-        side: BorderSide(
-            color: selected ? FlowColors.primary : Colors.black26,
-            width: 2),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          iconWidget,
-          const SizedBox(width: 6),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight:
-                      selected ? FontWeight.bold : FontWeight.normal,
-                  color: FlowColors.primary)),
-        ],
-      ),
-    );
-  }
-
-  void _resetFields() {
-    final today = DateTime.now();
-    setState(() {
-      _principalController.clear();
-      _fromDateController.clear();
-      _toDateController.text = _formatDate(today);
-      _fromDate = null;
-      _toDate = today;
-      _numberOfDays = null;
-      _simpleInterest = 0.0;
-      _totalAmount = 0.0;
-      _minimumChargeNote = '';
-      _hasResult = false;
-    });
   }
 
   void _showError(String message) {
@@ -504,7 +261,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             TextField(
               controller: _principalController,
               keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              inputFormatters: [IndianNumberFormatter()],
               style: const TextStyle(fontSize: 22),
               decoration: const InputDecoration(
                 prefixText: '₹  ',
@@ -620,14 +377,16 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 width: double.infinity,
                 height: 58,
                 child: ElevatedButton.icon(
-                  onPressed: _showClosePledgeDialog,
+                  onPressed: _openClosePledgeSearch,
                   icon: const Icon(Icons.lock, size: 24),
                   label: const Text('CLOSE PLEDGE',
                       style: TextStyle(
                           fontSize: 20, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: FlowColors.green,
-                    foregroundColor: Colors.white,
+                    backgroundColor: FlowColors.primary,
+                    foregroundColor: FlowColors.textOnNavyLarge,
+                    side: const BorderSide(
+                        color: FlowColors.borderOnNavy, width: 0.8),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                   ),

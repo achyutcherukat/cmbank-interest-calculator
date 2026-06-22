@@ -1,45 +1,49 @@
+/// A single entry in the accounts ledger (`payments` table — formerly the
+/// `transactions` table). Every cash/UPI movement in the business is one row:
+/// loan disbursements, closures, renewal interest, part payments, loan
+/// increases, expenses and balance adjustments.
 class PaymentModel {
   const PaymentModel({
     this.id,
-    required this.pledgeId,
     required this.paymentDate,
-    required this.amount,
+    required this.paymentType,
+    this.subCategory,
+    required this.direction,
+    this.amount = 0.0,
     this.cashAmount = 0.0,
     this.upiAmount = 0.0,
-    this.interestAmount = 0.0,
-    this.principalAmount = 0.0,
-    required this.paymentType,
-    this.paymentMode = 'cash',
+    this.pledgeId,
     this.notes,
+    this.createdBy,
     required this.createdAt,
   });
 
   final int? id;
-  final int pledgeId;
-  final String paymentDate;   // DB: paid_at (ISO 8601)
+  final String paymentDate; // DB: payment_date (ISO 8601 YYYY-MM-DD)
+  final String paymentType; // DB: payment_type (see PaymentType)
+  final String? subCategory; // DB: sub_category
+  final String direction; // DB: direction ('in' / 'out')
   final double amount;
-  final double cashAmount;    // DB: cash_amount
-  final double upiAmount;     // DB: upi_amount
-  final double interestAmount;  // DB: interest_amount
-  final double principalAmount; // DB: principal_amount
-  final String paymentType;   // interest / principal / closure / renewal
-  final String paymentMode;   // cash / upi / split / bank
+  final double cashAmount; // DB: cash_amount
+  final double upiAmount; // DB: upi_amount
+  final int? pledgeId; // DB: pledge_id (null for EXPENSE / ADJUSTMENT)
   final String? notes;
+  final int? createdBy; // DB: created_by
   final String createdAt;
 
   factory PaymentModel.fromMap(Map<String, dynamic> map) {
     return PaymentModel(
       id: map['id'] as int?,
-      pledgeId: map['pledge_id'] as int,
-      paymentDate: map['paid_at'] as String? ?? '',
+      paymentDate: map['payment_date'] as String? ?? '',
+      paymentType: map['payment_type'] as String? ?? '',
+      subCategory: map['sub_category'] as String?,
+      direction: map['direction'] as String? ?? 'in',
       amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
       cashAmount: (map['cash_amount'] as num?)?.toDouble() ?? 0.0,
       upiAmount: (map['upi_amount'] as num?)?.toDouble() ?? 0.0,
-      interestAmount: (map['interest_amount'] as num?)?.toDouble() ?? 0.0,
-      principalAmount: (map['principal_amount'] as num?)?.toDouble() ?? 0.0,
-      paymentType: map['payment_type'] as String? ?? 'closure',
-      paymentMode: map['payment_mode'] as String? ?? 'cash',
+      pledgeId: map['pledge_id'] as int?,
       notes: map['notes'] as String?,
+      createdBy: map['created_by'] as int?,
       createdAt: map['created_at'] as String? ?? '',
     );
   }
@@ -47,18 +51,58 @@ class PaymentModel {
   Map<String, dynamic> toMap() {
     return {
       if (id != null) 'id': id,
-      'pledge_id': pledgeId,
+      'payment_date': paymentDate,
       'payment_type': paymentType,
+      'sub_category': subCategory,
+      'direction': direction,
       'amount': amount,
       'cash_amount': cashAmount,
       'upi_amount': upiAmount,
-      'interest_amount': interestAmount,
-      'principal_amount': principalAmount,
-      'payment_mode': paymentMode,
-      'paid_at': paymentDate,
+      'pledge_id': pledgeId,
       'notes': notes,
-      'created_by': null,
+      'created_by': createdBy,
       'created_at': createdAt,
     };
   }
+}
+
+/// Canonical `payment_type` values (matches the CHECK constraint).
+class PaymentType {
+  const PaymentType._();
+
+  static const loanDisbursed = 'LOAN_DISBURSED';
+  static const loanFullClosure = 'LOAN_FULL_CLOSURE';
+  static const renewalInterestPaid = 'RENEWAL_INTEREST_PAID';
+  static const partPaymentReceived = 'PART_PAYMENT_RECEIVED';
+  static const loanIncreaseDisbursed = 'LOAN_INCREASE_DISBURSED';
+  static const expense = 'EXPENSE';
+  static const adjustment = 'ADJUSTMENT';
+}
+
+/// `direction` values.
+class PaymentDirection {
+  const PaymentDirection._();
+
+  static const inward = 'in';
+  static const outward = 'out';
+}
+
+/// Canonical `sub_category` values used by part payments, loan increases and
+/// balance adjustments.
+class PaymentSubCategory {
+  const PaymentSubCategory._();
+
+  // Part payment
+  static const principalAndInterest = 'PRINCIPAL_AND_INTEREST';
+  static const fixedAmountInclusive = 'FIXED_AMOUNT_INCLUSIVE';
+
+  // Loan increase
+  static const interestNotCapitalised = 'INTEREST_NOT_CAPITALISED';
+  static const interestCapitalised = 'INTEREST_CAPITALISED';
+
+  // Adjustments
+  static const addCash = 'ADD_CASH';
+  static const addUpi = 'ADD_UPI';
+  static const cashToUpi = 'CASH_TO_UPI';
+  static const upiToCash = 'UPI_TO_CASH';
 }

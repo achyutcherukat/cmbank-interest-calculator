@@ -6,6 +6,7 @@ import '../../../features/pledges/data/pledge_model.dart';
 import '../../../features/pledges/presentation/closed_pledges_screen.dart';
 import '../../../features/pledges/presentation/open_pledge_screen.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restorable_photo_thumb.dart';
 import '../data/customer_repository.dart';
 import 'add_edit_customer_screen.dart';
 
@@ -211,7 +212,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   // ─── Info Card ────────────────────────────────────────────────────────────
 
   Widget _infoCard(CustomerWithStats c) {
-    final photos = c.photoFiles;
+    final photos = c.photoPaths;
     return FlowCard(
       header: 'CUSTOMER INFORMATION',
       child: Column(
@@ -258,16 +259,14 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 scrollDirection: Axis.horizontal,
                 itemCount: photos.length,
                 separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (ctx, i) => GestureDetector(
-                  onTap: () => Navigator.push(
+                itemBuilder: (ctx, i) => RestorablePhotoThumb(
+                  localPath: photos[i],
+                  width: 90,
+                  height: 90,
+                  onView: (p) => Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => _FullScreenPhoto(file: photos[i])),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(photos[i],
-                        height: 90, width: 90, fit: BoxFit.cover),
+                        builder: (_) => _FullScreenPhoto(file: File(p))),
                   ),
                 ),
               ),

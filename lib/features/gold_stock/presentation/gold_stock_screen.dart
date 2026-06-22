@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/settings/app_settings_repository.dart';
 import '../../../features/admin/data/admin_repository.dart';
+import '../../../features/auth/data/auth_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../data/gold_stock_repository.dart';
 import 'gold_in_drill_down_screen.dart';
@@ -21,6 +23,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
   double _goldRate = 0;
   bool _isAdmin = false;
   bool _loading = true;
+  String? _firstStockDate;
 
   @override
   void initState() {
@@ -42,10 +45,9 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
   bool get _canGoBack {
-    final minDate = _isAdmin
-        ? DateTime(2000)
-        : _today.subtract(const Duration(days: 9));
-    return _selectedDate.isAfter(minDate);
+    if (_firstStockDate == null) return false;
+    final first = DateTime.parse(_firstStockDate!);
+    return _selectedDate.isAfter(first);
   }
 
   bool get _canGoForward => _selectedDate.isBefore(_today);
@@ -71,12 +73,18 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
         GoldStockRepository.instance.getOrCreateDayRecord(dateStr),
         GoldStockRepository.instance.getPurityBreakdown(),
         GoldStockRepository.instance.getGoldRate(),
+        // Canonical boundary: reads from app_use_start_date setting;
+        // falls back to MIN(stock_date) for installs predating this setting.
+        AppSettingsRepository().getString('app_use_start_date'),
       ]);
+      final String? firstDate = (results[3] as String?) ??
+          await GoldStockRepository.instance.getFirstStockDate();
       if (mounted) {
         setState(() {
           _record = results[0] as DailyStockRecord;
           _purities = results[1] as List<PurityStock>;
           _goldRate = results[2] as double;
+          _firstStockDate = firstDate;
           _loading = false;
         });
       }
@@ -95,7 +103,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
       appBar: AppBar(
         backgroundColor: FlowColors.primary,
         foregroundColor: FlowColors.goldRich,
-        title: const Text('Gold Stock Register',
+        title: const Text('Stock Register',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
         actions: [
           IconButton(
@@ -251,7 +259,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
             child: Column(
               children: [
                 _stockRow(Icons.lock_open, 'Opening Stock',
-                    r.openingWeight, r.openingCount,
+                    r.openingGrossWeight, r.openingWeight,
                     color: FlowColors.medText),
                 const SizedBox(height: 2),
                 const Divider(color: Color(0xFFEEEEEE)),
@@ -267,8 +275,8 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
                   child: _stockRow(
                     Icons.add_circle,
                     'Gold IN',
+                    r.goldInGrossWeight,
                     r.goldInWeight,
-                    r.goldInCount,
                     color: FlowColors.green,
                     tappable: true,
                   ),
@@ -285,19 +293,19 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
                   child: _stockRow(
                     Icons.remove_circle,
                     'Gold OUT',
+                    r.goldOutGrossWeight,
                     r.goldOutWeight,
-                    r.goldOutCount,
                     color: FlowColors.red,
                     tappable: true,
                   ),
                 ),
-                if (r.adjustmentWeight != 0 || r.adjustmentCount != 0) ...[
+                if (r.adjustmentWeight != 0) ...[
                   const SizedBox(height: 2),
                   _stockRow(
                     Icons.tune,
                     'Adjustment',
+                    0.0,
                     r.adjustmentWeight,
-                    r.adjustmentCount,
                     color: FlowColors.orange,
                     signed: true,
                   ),
@@ -308,8 +316,8 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
                 _stockRow(
                   Icons.lock,
                   'Closing Stock',
+                  r.closingGrossWeight,
                   r.closingWeight,
-                  r.closingCount,
                   color: FlowColors.primary,
                   isBold: true,
                 ),
@@ -324,14 +332,14 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
   Widget _stockRow(
     IconData icon,
     String label,
-    double weight,
-    int count, {
+    double grossWeight,
+    double netWeight, {
     Color color = FlowColors.darkText,
     bool tappable = false,
     bool isBold = false,
     bool signed = false,
   }) {
-    final prefix = signed && weight > 0 ? '+' : '';
+    final prefix = signed && netWeight > 0 ? '+' : '';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -352,16 +360,20 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '$prefix${weight.toStringAsFixed(2)} g',
+                'Gw: $prefix${grossWeight.toStringAsFixed(2)} g',
                 style: TextStyle(
-                  fontSize: isBold ? 18 : 16,
+                  fontSize: isBold ? 16 : 14,
                   fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
                   color: color,
                 ),
               ),
               Text(
-                '$count item${count == 1 ? '' : 's'}',
-                style: const TextStyle(fontSize: 12, color: Colors.black45),
+                'Nw: $prefix${netWeight.toStringAsFixed(2)} g',
+                style: TextStyle(
+                  fontSize: isBold ? 16 : 14,
+                  fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
+                  color: color,
+                ),
               ),
             ],
           ),
@@ -423,7 +435,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
                 children: [
                   Text(
                     _goldRate > 0
-                        ? '₹${_goldRate.round()}/g'
+                        ? '${money(_goldRate)}/g'
                         : 'Rate not set',
                     style: TextStyle(
                         fontSize: 18,
@@ -538,51 +550,26 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
     );
   }
 
-  // ── Unlock card (admin only) ──────────────────────────────────────────────────
+  // ── Unlock button (admin only) ───────────────────────────────────────────────
 
   Widget _unlockCard(DailyStockRecord r) {
-    return FlowCard(
-      borderColor: FlowColors.orange,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.lock_open, color: FlowColors.orange, size: 20),
-              const SizedBox(width: 8),
-              const Text('ADMIN UNLOCK',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: FlowColors.orange,
-                      letterSpacing: 0.8)),
-            ],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: SizedBox(
+        width: double.infinity,
+        height: 54,
+        child: ElevatedButton.icon(
+          onPressed: () => _showUnlockDialog(r),
+          icon: const Icon(Icons.lock_open, size: 20),
+          label: const Text('UNLOCK STOCK (ADMIN)',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: FlowColors.red,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'This day is locked. As admin, you can unlock it to allow edits.',
-            style: TextStyle(fontSize: 15, color: FlowColors.medText),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.lock_open, size: 18),
-              label: const Text('UNLOCK THIS DAY',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: FlowColors.orange,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: () => _showUnlockDialog(r),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -593,47 +580,23 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      child: Row(
-        children: [
-          Expanded(
-            child: SizedBox(
-              height: 58,
-              child: OutlinedButton.icon(
-                onPressed: _record == null ? null : _showAdjustSheet,
-                icon: const Icon(Icons.tune),
-                label: const Text('ADJUST STOCK',
-                    style:
-                        TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: FlowColors.medText,
-                  side: const BorderSide(color: Colors.grey),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
+      child: SizedBox(
+        width: double.infinity,
+        height: 58,
+        child: ElevatedButton.icon(
+          onPressed: _record == null ? null : _checkPrevDayAndVerify,
+          icon: const Icon(Icons.verified, color: FlowColors.goldRich),
+          label: const Text('VERIFY STOCK',
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: FlowColors.textOnNavySmall)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: FlowColors.primary,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: SizedBox(
-              height: 58,
-              child: ElevatedButton.icon(
-                onPressed: _record == null ? null : _showVerifySheet,
-                icon: const Icon(Icons.verified, color: FlowColors.goldRich),
-                label: const Text('VERIFY STOCK',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: FlowColors.textOnNavySmall)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: FlowColors.primary,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -702,18 +665,98 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
 
   // ── Bottom sheets ─────────────────────────────────────────────────────────────
 
-  void _showAdjustSheet() {
-    showModalBottomSheet(
+  Future<void> _checkPrevDayAndVerify() async {
+    final prevDate = _selectedDate.subtract(const Duration(days: 1));
+    final prevIso = _dateKey(prevDate);
+
+    // Before the first stock date → this is the very first stock day → allow.
+    if (_firstStockDate == null || prevIso.compareTo(_firstStockDate!) < 0) {
+      _showVerifySheet();
+      return;
+    }
+
+    final prevRecord =
+        await GoldStockRepository.instance.getForDate(prevIso);
+    if (!mounted) return;
+
+    // No row (never opened) or already locked → allow.
+    if (prevRecord == null || prevRecord.isLocked) {
+      _showVerifySheet();
+      return;
+    }
+
+    // Previous day exists but is unverified → block.
+    _showPrevDayBlockedDialog(prevDate, prevIso);
+  }
+
+  void _showPrevDayBlockedDialog(DateTime prevDate, String prevIso) {
+    final prevDisplay = _displayDate(prevDate);
+    final curDisplay = _displayDate(_selectedDate);
+    showDialog(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _AdjustStockSheet(
-        date: _dateKey(_selectedDate),
-        displayDate: _displayDate(_selectedDate),
-        onDone: () {
-          Navigator.pop(context);
-          _load();
-        },
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Stock Not Verified',
+          style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: FlowColors.red),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Cannot verify stock for $curDisplay. Stock for the previous day has not been verified yet. Please verify that day first.',
+                style: const TextStyle(fontSize: 15),
+              ),
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  setState(() => _selectedDate = prevDate);
+                  _load();
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: FlowColors.orangeLight,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: FlowColors.orange),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.calendar_today,
+                          color: FlowColors.orange, size: 16),
+                      const SizedBox(width: 8),
+                      Text(
+                        prevDisplay,
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.orange),
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(Icons.arrow_forward,
+                          color: FlowColors.orange, size: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK',
+                style: TextStyle(
+                    fontSize: 16, color: FlowColors.primary)),
+          ),
+        ],
       ),
     );
   }
@@ -739,283 +782,112 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
   }
 
   void _showUnlockDialog(DailyStockRecord r) {
+    final pinCtrl = TextEditingController();
     final reasonCtrl = TextEditingController();
+    String? error;
+    bool unlocking = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Unlock Stock Day',
-            style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: FlowColors.orange)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('This will allow edits to a locked day. Enter reason:',
-                style: TextStyle(fontSize: 15)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reasonCtrl,
-              autofocus: true,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                labelText: 'Reason *',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(fontSize: 16, color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: FlowColors.orange),
-            onPressed: () async {
-              final reason = reasonCtrl.text.trim();
-              if (reason.isEmpty) return;
-              Navigator.pop(ctx);
-              await GoldStockRepository.instance.unlockDay(
-                date: _dateKey(_selectedDate),
-                reason: reason,
-                unlockedBy: 'Admin',
-              );
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Day unlocked — edits are now allowed.'),
-                    backgroundColor: FlowColors.orange,
-                  ),
-                );
-                _load();
-              }
-            },
-            child: const Text('UNLOCK',
-                style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Adjust Stock Bottom Sheet ────────────────────────────────────────────────
-
-class _AdjustStockSheet extends StatefulWidget {
-  const _AdjustStockSheet({
-    required this.date,
-    required this.displayDate,
-    required this.onDone,
-  });
-
-  final String date;
-  final String displayDate;
-  final VoidCallback onDone;
-
-  @override
-  State<_AdjustStockSheet> createState() => _AdjustStockSheetState();
-}
-
-class _AdjustStockSheetState extends State<_AdjustStockSheet> {
-  bool _isAdd = true;
-  final _weightCtrl = TextEditingController();
-  final _countCtrl = TextEditingController();
-  final _reasonCtrl = TextEditingController();
-  bool _loading = false;
-
-  @override
-  void dispose() {
-    _weightCtrl.dispose();
-    _countCtrl.dispose();
-    _reasonCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _confirm() async {
-    final weight = double.tryParse(_weightCtrl.text) ?? 0;
-    final count = int.tryParse(_countCtrl.text) ?? 0;
-    final reason = _reasonCtrl.text.trim();
-
-    if (weight <= 0 && count <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter weight or item count to adjust.')),
-      );
-      return;
-    }
-    if (reason.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Reason is required.')),
-      );
-      return;
-    }
-
-    setState(() => _loading = true);
-    try {
-      await GoldStockRepository.instance.adjustStock(
-        date: widget.date,
-        weight: weight,
-        count: count,
-        reason: reason,
-        isAdd: _isAdd,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                '${_isAdd ? "Added" : "Removed"} ${weight.toStringAsFixed(2)} g, $count item${count == 1 ? '' : 's'}'),
-            backgroundColor: FlowColors.green,
-          ),
-        );
-        widget.onDone();
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.black12,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text('Adjust Stock — ${widget.displayDate}',
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: FlowColors.darkText)),
-            const SizedBox(height: 16),
-            // Option cards
-            Row(
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Text('Unlock Stock — Admin Only',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: FlowColors.red)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(child: _optionCard(isAdd: true)),
-                const SizedBox(width: 12),
-                Expanded(child: _optionCard(isAdd: false)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _weightCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
-              ],
-              decoration: const InputDecoration(
-                labelText: 'Weight (grams)',
-                prefixIcon: Icon(Icons.balance),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _countCtrl,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(
-                labelText: 'Item Count',
-                prefixIcon: Icon(Icons.format_list_numbered),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _reasonCtrl,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                labelText: 'Reason *',
-                prefixIcon: Icon(Icons.edit_note),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 58,
-              child: ElevatedButton(
-                onPressed: _loading ? null : _confirm,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      _isAdd ? FlowColors.green : FlowColors.orange,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                const FlowNoticeBox(
+                  text: 'Unlocking allows edits. This action will be logged.',
+                  color: FlowColors.orange,
+                  backgroundColor: FlowColors.orangeLight,
+                  icon: Icons.warning_amber,
                 ),
-                child: _loading
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2.5, color: Colors.white))
-                    : Text(
-                        _isAdd ? 'CONFIRM — ADD STOCK' : 'CONFIRM — REMOVE STOCK',
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white)),
-              ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: pinCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                  ],
+                  obscureText: true,
+                  maxLength: 6,
+                  decoration: const InputDecoration(
+                      labelText: 'Admin PIN *',
+                      border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: reasonCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Reason for unlock *',
+                      border: OutlineInputBorder()),
+                  maxLines: 2,
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(error!,
+                      style: const TextStyle(
+                          color: Colors.red, fontSize: 14)),
+                ],
+              ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _optionCard({required bool isAdd}) {
-    final selected = _isAdd == isAdd;
-    final color = isAdd ? FlowColors.green : FlowColors.orange;
-    final bgColor = isAdd ? FlowColors.greenLight : FlowColors.orangeLight;
-    final icon = isAdd ? Icons.add_circle : Icons.remove_circle;
-    final label = isAdd ? 'ADD STOCK' : 'REMOVE STOCK';
-
-    return GestureDetector(
-      onTap: () => setState(() => _isAdd = isAdd),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          color: selected ? bgColor : FlowColors.bg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: selected ? color : Colors.black26,
-            width: selected ? 2 : 1,
           ),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 28),
-            const SizedBox(height: 6),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: color)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: FlowColors.red,
+                  foregroundColor: Colors.white),
+              onPressed: unlocking
+                  ? null
+                  : () async {
+                      if (pinCtrl.text.trim().isEmpty) {
+                        setD(() => error = 'Enter admin PIN.');
+                        return;
+                      }
+                      if (reasonCtrl.text.trim().isEmpty) {
+                        setD(() => error = 'Reason is required.');
+                        return;
+                      }
+                      final pinOk = await AuthRepository()
+                          .verifyAdminPin(pinCtrl.text.trim());
+                      if (!pinOk) {
+                        setD(() => error = 'Incorrect PIN.');
+                        return;
+                      }
+                      setD(() => unlocking = true);
+
+                      final reason = reasonCtrl.text.trim();
+                      await GoldStockRepository.instance.unlockDay(
+                        date: _dateKey(_selectedDate),
+                        reason: reason,
+                      );
+
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      _load();
+                    },
+              child: unlocking
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Text('UNLOCK',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+            ),
           ],
         ),
       ),
@@ -1045,30 +917,32 @@ class _VerifyStockSheet extends StatefulWidget {
 }
 
 class _VerifyStockSheetState extends State<_VerifyStockSheet> {
+  final _grossWeightCtrl = TextEditingController();
   final _weightCtrl = TextEditingController();
-  final _countCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
   bool _loading = false;
 
+  double get _expectedGrossWeight => widget.record.closingGrossWeight;
   double get _expectedWeight => widget.record.closingWeight;
-  int get _expectedCount => widget.record.closingCount;
 
+  double get _actualGrossWeight =>
+      double.tryParse(_grossWeightCtrl.text) ?? -1;
   double get _actualWeight => double.tryParse(_weightCtrl.text) ?? -1;
-  int get _actualCount => int.tryParse(_countCtrl.text) ?? -1;
 
   bool get _entered =>
-      _weightCtrl.text.isNotEmpty && _countCtrl.text.isNotEmpty;
+      _grossWeightCtrl.text.isNotEmpty && _weightCtrl.text.isNotEmpty;
 
+  double get _grossDiff =>
+      _entered ? _actualGrossWeight - _expectedGrossWeight : 0;
   double get _weightDiff => _entered ? _actualWeight - _expectedWeight : 0;
-  int get _countDiff => _entered ? _actualCount - _expectedCount : 0;
 
   bool get _isMatch =>
-      _entered && _weightDiff.abs() < 0.005 && _countDiff == 0;
+      _entered && _grossDiff.abs() < 0.005 && _weightDiff.abs() < 0.005;
 
   @override
   void dispose() {
+    _grossWeightCtrl.dispose();
     _weightCtrl.dispose();
-    _countCtrl.dispose();
     _noteCtrl.dispose();
     super.dispose();
   }
@@ -1076,7 +950,8 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
   Future<void> _lock() async {
     if (!_entered) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter actual weight and item count.')),
+        const SnackBar(
+            content: Text('Enter actual gross and net weight.')),
       );
       return;
     }
@@ -1092,10 +967,9 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
     try {
       await GoldStockRepository.instance.verifyAndLock(
         date: widget.date,
+        actualGrossWeight: _actualGrossWeight,
         actualWeight: _actualWeight,
-        actualCount: _actualCount,
         discrepancyNote: _isMatch ? null : _noteCtrl.text.trim(),
-        lockedBy: widget.isAdmin ? 'Admin' : 'Staff',
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1115,10 +989,10 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final grossDiffColor =
+        _grossDiff.abs() < 0.005 ? FlowColors.green : FlowColors.red;
     final weightDiffColor =
         _weightDiff.abs() < 0.005 ? FlowColors.green : FlowColors.red;
-    final countDiffColor =
-        _countDiff == 0 ? FlowColors.green : FlowColors.red;
 
     return Padding(
       padding:
@@ -1173,13 +1047,13 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
                     Row(
                       children: [
                         Expanded(
-                          child: _expectedTile('Weight',
-                              '${_expectedWeight.toStringAsFixed(2)} g'),
+                          child: _expectedTile('Gross Wt',
+                              '${_expectedGrossWeight.toStringAsFixed(2)} g'),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: _expectedTile(
-                              'Items', '$_expectedCount'),
+                          child: _expectedTile('Net Wt',
+                              '${_expectedWeight.toStringAsFixed(2)} g'),
                         ),
                       ],
                     ),
@@ -1200,6 +1074,23 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
                 children: [
                   Expanded(
                     child: TextField(
+                      controller: _grossWeightCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                            RegExp(r'^\d+\.?\d{0,2}')),
+                      ],
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Actual Gross Wt (g)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
                       controller: _weightCtrl,
                       keyboardType: const TextInputType.numberWithOptions(
                           decimal: true),
@@ -1209,20 +1100,7 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
                       ],
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
-                        labelText: 'Actual Weight (g)',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _countCtrl,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Actual Items',
+                        labelText: 'Actual Net Wt (g)',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -1269,17 +1147,17 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
                         children: [
                           Expanded(
                             child: _diffTile(
-                              'Weight Diff',
-                              '${_weightDiff >= 0 ? '+' : ''}${_weightDiff.toStringAsFixed(2)} g',
-                              color: weightDiffColor,
+                              'Gross Diff',
+                              '${_grossDiff >= 0 ? '+' : ''}${_grossDiff.toStringAsFixed(2)} g',
+                              color: grossDiffColor,
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: _diffTile(
-                              'Item Diff',
-                              '${_countDiff >= 0 ? '+' : ''}$_countDiff',
-                              color: countDiffColor,
+                              'Net Diff',
+                              '${_weightDiff >= 0 ? '+' : ''}${_weightDiff.toStringAsFixed(2)} g',
+                              color: weightDiffColor,
                             ),
                           ),
                         ],

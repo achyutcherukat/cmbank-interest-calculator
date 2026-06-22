@@ -3,8 +3,11 @@ import 'package:flutter/services.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/security/pin_hasher.dart';
+import '../../../core/services/encryption_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../app/theme.dart';
+import '../../../shared/widgets/flow_widgets.dart';
+import '../../gold_stock/data/gold_rates_repository.dart';
 
 class FirstLaunchWizard extends StatefulWidget {
   const FirstLaunchWizard({super.key, required this.onComplete});
@@ -24,12 +27,18 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   final _confirmAdminPinController = TextEditingController();
   final _interestRateController = TextEditingController(text: '18.00');
   final _pledgeRateController = TextEditingController(text: '0.00');
-  final _startingPledgeNoController = TextEditingController(text: '3200');
+  final _startingPledgeNoController = TextEditingController();
   final _openingCashController = TextEditingController(text: '0');
   final _openingUpiController = TextEditingController(text: '0');
-  final _openingStockWeightController = TextEditingController(text: '0');
-  final _openingStockCountController = TextEditingController(text: '0');
+  final _openingGoldAccountController = TextEditingController(text: '0');
+  final _openingGrossWeightController = TextEditingController(text: '0');
+  final _openingNetWeightController = TextEditingController(text: '0');
   final _settingsRepository = AppSettingsRepository();
+
+  // The date from which this install begins tracking cash/stock. Migrated
+  // pledges must pre-date this value; Cash Book and Stock Register navigate
+  // no earlier than this date.
+  DateTime _appStartDate = DateTime.now();
 
   bool _isSaving = false;
   bool _biometricEnabled = false;
@@ -46,8 +55,9 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
     _startingPledgeNoController.dispose();
     _openingCashController.dispose();
     _openingUpiController.dispose();
-    _openingStockWeightController.dispose();
-    _openingStockCountController.dispose();
+    _openingGoldAccountController.dispose();
+    _openingGrossWeightController.dispose();
+    _openingNetWeightController.dispose();
     super.dispose();
   }
 
@@ -68,40 +78,53 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
         ),
         'common_pin_hash': (value: commonPinHash, type: 'string'),
         'admin_pin_hash': (value: adminPinHash, type: 'string'),
-        'default_interest_rate': (
+        'interest_rate': (
           value: _interestRateController.text.trim(),
-          type: 'double',
-        ),
-        'default_pledge_rate': (
-          value: _pledgeRateController.text.trim(),
-          type: 'double',
+          type: 'string',
         ),
         'starting_pledge_number': (
           value: _startingPledgeNoController.text.trim(),
           type: 'int',
         ),
         'opening_cash': (
-          value: _openingCashController.text.trim(),
-          type: 'double',
+          value: _openingCashController.text.trim().replaceAll(',', ''),
+          type: 'string',
         ),
         'opening_upi': (
-          value: _openingUpiController.text.trim(),
-          type: 'double',
+          value: _openingUpiController.text.trim().replaceAll(',', ''),
+          type: 'string',
         ),
-        'opening_stock_weight': (
-          value: _openingStockWeightController.text.trim(),
-          type: 'double',
-        ),
-        'opening_stock_count': (
-          value: _openingStockCountController.text.trim(),
+        'opening_gold_account_balance': (
+          value: _openingGoldAccountController.text.trim().replaceAll(',', ''),
           type: 'int',
         ),
-        'first_launch_completed': (value: 'true', type: 'bool'),
+        'app_use_start_date': (
+          value: _appStartDate.toIso8601String().substring(0, 10),
+          type: 'string',
+        ),
+        'opening_gold_account_balance_date': (
+          value: _appStartDate.toIso8601String().substring(0, 10),
+          type: 'string',
+        ),
+        'opening_stock_gross_weight': (
+          value: _openingGrossWeightController.text.trim(),
+          type: 'string',
+        ),
+        'opening_stock_net_weight': (
+          value: _openingNetWeightController.text.trim(),
+          type: 'string',
+        ),
+        'device_setup_complete': (value: 'true', type: 'bool'),
         'biometric_enabled': (
           value: _biometricEnabled.toString(),
           type: 'bool',
         ),
       });
+
+      // Seed the initial pledge rate into the gold_rates table.
+      final pledgeRate =
+          double.tryParse(_pledgeRateController.text.trim()) ?? 0;
+      await GoldRatesRepository.instance.saveRates(pledgeRate: pledgeRate);
 
       await db.update(
         'users',
@@ -112,6 +135,14 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
         where: 'role = ?',
         whereArgs: ['admin'],
       );
+
+      // Generate the AES-256 backup encryption key (Part 2 — on first launch).
+      try {
+        await EncryptionService.instance
+            .ensureKeyInitialized(_adminPinController.text.trim());
+      } catch (_) {
+        // Non-fatal — the key can be created later from backup settings.
+      }
 
       if (mounted) widget.onComplete();
     } catch (error, stackTrace) {
@@ -292,54 +323,90 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
               const SizedBox(height: 10),
               TextFormField(
                 controller: _openingCashController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [_decimalFormatter],
+                keyboardType: TextInputType.number,
+                inputFormatters: [IndianNumberFormatter()],
                 decoration: const InputDecoration(
                   labelText: 'Opening Cash Balance (₹)',
                   prefixIcon: Icon(Icons.money),
                 ),
-                validator: _validateNonNegativeDecimal,
+                validator: (value) {
+                  final n = int.tryParse(
+                      (value ?? '').replaceAll(',', '').trim());
+                  if (n == null || n < 0) return 'Enter a valid amount.';
+                  return null;
+                },
               ),
               const SizedBox(height: 14),
               TextFormField(
                 controller: _openingUpiController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [_decimalFormatter],
+                keyboardType: TextInputType.number,
+                inputFormatters: [IndianNumberFormatter()],
                 decoration: const InputDecoration(
                   labelText: 'Opening UPI Balance (₹)',
                   prefixIcon: Icon(Icons.phone_android),
                 ),
-                validator: _validateNonNegativeDecimal,
+                validator: (value) {
+                  final n = int.tryParse(
+                      (value ?? '').replaceAll(',', '').trim());
+                  if (n == null || n < 0) return 'Enter a valid amount.';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _openingGoldAccountController,
+                keyboardType: TextInputType.number,
+                inputFormatters: [IndianNumberFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Gold Account Balance (₹)',
+                  prefixIcon: Icon(Icons.account_balance),
+                  helperText: 'Opening balance of the gold loan account',
+                ),
+                validator: (value) {
+                  final n =
+                      int.tryParse((value ?? '').trim().replaceAll(',', ''));
+                  if (n == null || n < 0) {
+                    return 'Enter a valid amount.';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 24),
               _sectionTitle('Opening Gold Stock'),
               const SizedBox(height: 10),
+              // App start date — the canonical boundary for Cash Book / Stock
+              // Register navigation and Add Existing Loan date restrictions.
+              _DatePickerTile(
+                label: 'App Start Date',
+                helperText:
+                    'Date from which this app begins tracking daily cash and gold stock. '
+                    'Add Existing Loan entries must be dated before this date.',
+                selectedDate: _appStartDate,
+                onChanged: (dt) => setState(() => _appStartDate = dt),
+              ),
+              const SizedBox(height: 14),
               TextFormField(
-                controller: _openingStockWeightController,
+                controller: _openingGrossWeightController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 inputFormatters: [_decimalFormatter],
                 decoration: const InputDecoration(
-                  labelText: 'Opening Stock Weight (grams)',
+                  labelText: 'Opening Gross Weight (grams)',
                   prefixIcon: Icon(Icons.balance),
-                  helperText: 'Total gold weight you currently hold',
+                  helperText: 'Total gross weight of gold you currently hold',
                 ),
                 validator: _validateNonNegativeDecimal,
               ),
               const SizedBox(height: 14),
               TextFormField(
-                controller: _openingStockCountController,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                controller: _openingNetWeightController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_decimalFormatter],
                 decoration: const InputDecoration(
-                  labelText: 'Opening Item Count',
-                  prefixIcon: Icon(Icons.format_list_numbered),
-                  helperText: 'Number of gold items you currently hold',
+                  labelText: 'Opening Net Weight (grams)',
+                  prefixIcon: Icon(Icons.scale),
+                  helperText: 'Total net weight of gold you currently hold',
                 ),
-                validator: (value) {
-                  final n = int.tryParse(value?.trim() ?? '');
-                  if (n == null || n < 0) return 'Enter a valid item count.';
-                  return null;
-                },
+                validator: _validateNonNegativeDecimal,
               ),
               const SizedBox(height: 30),
               ElevatedButton.icon(
@@ -417,4 +484,63 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   static final _decimalFormatter = FilteringTextInputFormatter.allow(
     RegExp(r'^\d+\.?\d{0,2}'),
   );
+}
+
+// ─── Date picker row used for the App Start Date field ────────────────────────
+
+class _DatePickerTile extends StatelessWidget {
+  const _DatePickerTile({
+    required this.label,
+    required this.selectedDate,
+    required this.onChanged,
+    this.helperText,
+  });
+
+  final String label;
+  final String? helperText;
+  final DateTime selectedDate;
+  final ValueChanged<DateTime> onChanged;
+
+  String _fmt(DateTime dt) =>
+      '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InputDecorator(
+          decoration: InputDecoration(
+            labelText: label,
+            prefixIcon: const Icon(Icons.event),
+            border: const OutlineInputBorder(),
+            suffixIcon: TextButton(
+              onPressed: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: selectedDate,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime.now(),
+                );
+                if (picked != null) onChanged(picked);
+              },
+              child: const Text('CHANGE'),
+            ),
+          ),
+          child: Text(
+            _fmt(selectedDate),
+            style: const TextStyle(fontSize: 16),
+          ),
+        ),
+        if (helperText != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 0, 0),
+            child: Text(
+              helperText!,
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ),
+      ],
+    );
+  }
 }
