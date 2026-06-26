@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'app_branding.dart';
 import '../core/database/app_database.dart';
 import '../core/services/crash_recovery.dart';
 import '../core/settings/app_settings_repository.dart';
@@ -200,19 +201,19 @@ class _StartupLoadingScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       backgroundColor: CMBColors.navy,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Image(
-              image: AssetImage('assets/images/cmb_logo.png'),
+              image: AssetImage(AppBranding.logoAsset),
               width: 180,
               height: 180,
             ),
-            SizedBox(height: 56),
-            CircularProgressIndicator(color: CMBColors.goldRich),
+            const SizedBox(height: 56),
+            const CircularProgressIndicator(color: CMBColors.goldRich),
           ],
         ),
       ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../app/app_branding.dart';
 import '../../../app/theme.dart';
 import '../../../core/services/backup_status_service.dart';
 import '../../../shared/widgets/flow_widgets.dart';
@@ -263,12 +264,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         centerTitle: true,
         title: Image.asset(
-          'assets/images/cmb_logo.png',
-          height: 88,
-          width: 88,
+          AppBranding.logoAsset,
+          height: 72,
           fit: BoxFit.contain,
           errorBuilder: (_, _, _) =>
-              const Icon(Icons.shield, color: _gold, size: 88),
+              const Icon(Icons.shield, color: _gold, size: 72),
         ),
         actions: const [
           SizedBox(width: 56),
@@ -540,22 +540,26 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label,
-                  style: const TextStyle(fontSize: 12, color: _tSec)),
-              const SizedBox(height: 2),
-              Text(
-                value > 0 ? '${money(value)}/g' : 'Not set',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: value > 0 ? _tPrimary : Colors.black38,
-                  height: 1.1,
+          child: GestureDetector(
+            onTap: onEdit,
+            behavior: HitTestBehavior.opaque,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: const TextStyle(fontSize: 12, color: _tSec)),
+                const SizedBox(height: 2),
+                Text(
+                  value > 0 ? '${money(value)}/g' : 'Not set',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: value > 0 ? _tPrimary : Colors.black38,
+                    height: 1.1,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         GestureDetector(
@@ -862,7 +866,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.fromLTRB(20, 52, 20, 20),
             child: Center(
               child: Image.asset(
-                'assets/images/cmb_logo.png',
+                AppBranding.logoAsset,
                 height: 80,
                 width: 80,
                 fit: BoxFit.contain,

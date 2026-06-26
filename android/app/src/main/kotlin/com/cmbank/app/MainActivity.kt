@@ -1,4 +1,4 @@
-package com.example.cmbank_interest_calculator
+package com.cmbank.app
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 

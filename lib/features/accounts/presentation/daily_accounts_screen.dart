@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/database/app_database.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../auth/data/auth_repository.dart';
@@ -758,17 +759,20 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
 
   // ─── Add Expense ──────────────────────────────────────────────────────────
 
-  void _showAddExpense() {
-    const cats = [
-      'Rent',
-      'Electricity',
-      'Staff Salary',
-      'Office Supplies',
-      'Other'
-    ];
+  Future<void> _showAddExpense() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'expense_categories',
+      columns: ['name'],
+      where: 'is_active = 1',
+      orderBy: 'name ASC',
+    );
+    final cats = rows.map((r) => r['name'] as String).toList();
+
+    if (!mounted) return;
+
     final amountCtrl = TextEditingController();
     final notesCtrl = TextEditingController();
-    final otherCtrl = TextEditingController();
     String? selectedCat;
     String mode = 'cash';
     String? error;
@@ -836,15 +840,6 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                         .toList(),
                     onChanged: (v) => setBS(() => selectedCat = v),
                   ),
-                  if (selectedCat == 'Other') ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: otherCtrl,
-                      decoration: const InputDecoration(
-                          labelText: 'Specify category',
-                          border: OutlineInputBorder()),
-                    ),
-                  ],
                   const SizedBox(height: 16),
                   const Text('Payment Method',
                       style: TextStyle(
@@ -915,12 +910,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                     return;
                                   }
                                   setBS(() => saving = true);
-                                  final catLabel =
-                                      selectedCat == 'Other'
-                                          ? (otherCtrl.text.trim().isEmpty
-                                              ? 'Other'
-                                              : otherCtrl.text.trim())
-                                          : selectedCat!;
+                                  final catLabel = selectedCat!;
                                   final notes = notesCtrl.text.trim();
                                   await PaymentsRepository.instance
                                       .createExpense(

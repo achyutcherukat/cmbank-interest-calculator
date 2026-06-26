@@ -12,6 +12,7 @@ import '../../../shared/widgets/flow_widgets.dart';
 import '../../backup/presentation/backup_actions.dart';
 import '../data/admin_repository.dart';
 import '../data/audit_log_repository.dart';
+import 'initial_setup_values_screen.dart';
 import '../data/item_types_repository.dart';
 import '../data/purity_types_repository.dart';
 
@@ -248,6 +249,9 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                 const SizedBox(height: 10),
                 _sectionHeader('Audit Log', Icons.history),
                 _auditLogTile(),
+                const SizedBox(height: 10),
+                _sectionHeader('Setup Values', Icons.history_edu_outlined),
+                _setupValuesTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Info', Icons.info_outline),
                 _infoCard(),
@@ -1342,6 +1346,32 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                       fontSize: 16, color: Colors.white)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // ── Setup Values ──────────────────────────────────────────────────────────────
+
+  Widget _setupValuesTile() {
+    return FlowCard(
+      padding: const EdgeInsets.all(0),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        leading: const Icon(Icons.history_edu,
+            color: FlowColors.primary, size: 28),
+        title: const Text('Initial Setup Values',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        subtitle: const Text(
+            'Opening balances and stock from first launch',
+            style: TextStyle(fontSize: 14, color: FlowColors.medText)),
+        trailing: const Icon(Icons.chevron_right),
+        minVerticalPadding: 16,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => const InitialSetupValuesScreen()),
         ),
       ),
     );

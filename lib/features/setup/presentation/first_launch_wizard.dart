@@ -208,7 +208,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 textInputAction: TextInputAction.next,
                 inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
-                  labelText: 'Common Staff PIN',
+                  labelText: 'Common PIN',
                   prefixIcon: Icon(Icons.lock_outline),
                 ),
                 validator: _validatePin,
@@ -221,7 +221,7 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
                 textInputAction: TextInputAction.next,
                 inputFormatters: [_pinFormatter, _pinLengthFormatter],
                 decoration: const InputDecoration(
-                  labelText: 'Confirm Staff PIN',
+                  labelText: 'Confirm Common PIN',
                   prefixIcon: Icon(Icons.lock_reset),
                 ),
                 validator: (value) => _validatePinMatch(

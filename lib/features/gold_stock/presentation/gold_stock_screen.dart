@@ -128,7 +128,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
                           _dailyStockCard(record),
                           _stockValueCard(record),
                           _purityCard(),
-                          if (locked && _isAdmin) _unlockCard(record),
+                          if (locked) _unlockCard(record),
                         ] else
                           const Center(
                             child: Padding(
@@ -577,24 +577,27 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
   // ── Bottom buttons ────────────────────────────────────────────────────────────
 
   Widget _bottomButtons() {
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      child: SizedBox(
-        width: double.infinity,
-        height: 58,
-        child: ElevatedButton.icon(
-          onPressed: _record == null ? null : _checkPrevDayAndVerify,
-          icon: const Icon(Icons.verified, color: FlowColors.goldRich),
-          label: const Text('VERIFY STOCK',
-              style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: FlowColors.textOnNavySmall)),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: FlowColors.primary,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
+    return SafeArea(
+      top: false,
+      child: Container(
+        color: Colors.white,
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: SizedBox(
+          width: double.infinity,
+          height: 58,
+          child: ElevatedButton.icon(
+            onPressed: _record == null ? null : _checkPrevDayAndVerify,
+            icon: const Icon(Icons.verified, color: FlowColors.goldRich),
+            label: const Text('VERIFY STOCK',
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.textOnNavySmall)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: FlowColors.primary,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
           ),
         ),
       ),

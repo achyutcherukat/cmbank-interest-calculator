@@ -112,10 +112,6 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
 
-flutter_launcher_icons:
-  android: true
-  ios: false
-  image_path: "assets/images/cmb_icon_square.png"
-  min_sdk_android: 21
-  adaptive_icon_background: "#0D1B3E"
-  adaptive_icon_foreground: "assets/images/cmb_icon_square.png"
+# Launcher icons are configured per Android flavor in
+# flutter_launcher_icons-cmb.yaml and flutter_launcher_icons-gmc.yaml.
+# Run:  dart run flutter_launcher_icons   (auto-detects both flavor configs)

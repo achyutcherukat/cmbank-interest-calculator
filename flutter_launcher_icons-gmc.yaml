@@ -1,0 +1,12 @@
+# Launcher icons for the GMC flavor.
+# Source is the real GMC emblem (1024x1024 square, center-cropped from the
+# supplied artwork). Regenerate after changing the asset:
+#   dart run flutter_launcher_icons
+# Generated into android/app/src/gmc/res/.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/images/gmc_logo.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#0D1B3E"
+  adaptive_icon_foreground: "assets/images/gmc_logo.png"

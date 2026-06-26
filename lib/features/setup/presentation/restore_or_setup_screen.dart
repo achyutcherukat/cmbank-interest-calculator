@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../app/app_branding.dart';
 import '../../../app/startup_gate.dart';
 import '../../../app/theme.dart';
 import '../../../core/database/app_database.dart';
@@ -232,7 +233,7 @@ class _RestoreOrSetupScreenState extends State<RestoreOrSetupScreen> {
                 children: [
                   const Spacer(),
                   Image.asset(
-                    'assets/images/cmb_logo.png',
+                    AppBranding.logoAsset,
                     width: 140,
                     height: 140,
                   ),

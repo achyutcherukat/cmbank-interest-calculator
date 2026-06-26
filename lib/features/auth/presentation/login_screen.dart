@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../app/app_branding.dart';
 import '../../../app/theme.dart';
 import '../data/auth_repository.dart';
 
@@ -147,9 +148,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Image.asset(
-                    'assets/images/cmb_logo.png',
-                    width: 140,
-                    height: 140,
+                    AppBranding.logoAsset,
+                    width: 280,
+                    height: 280,
                   ),
                   const SizedBox(height: 40),
 
@@ -165,7 +166,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ],
                       style: const TextStyle(fontSize: 24),
                       decoration: InputDecoration(
-                        labelText: 'Staff PIN (6 digits)',
+                        labelText: 'PIN (6 digits)',
                         prefixIcon: const Icon(Icons.lock_outline),
                         errorText: _errorText,
                       ),
@@ -283,7 +284,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     TextButton(
                       onPressed: _toggleAdminPin,
                       child: const Text(
-                        '← Back to Staff PIN',
+                        '← Back to PIN',
                         style: TextStyle(fontSize: 17, color: CMBColors.goldLight),
                       ),
                     ),
