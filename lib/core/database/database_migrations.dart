@@ -32,6 +32,114 @@ class DatabaseMigrations {
     if (oldVersion < 8) {
       await _migrateV7toV8(db);
     }
+    if (oldVersion < 9) {
+      await _migrateV8toV9(db);
+    }
+  }
+
+  static Future<void> _migrateV8toV9(Database db) async {
+    await db.execute('PRAGMA foreign_keys = OFF');
+
+    // 1. Create bank_accounts and daily_account_balance tables.
+    await db.execute(DatabaseSchema.createBankAccounts);
+    await db.execute(DatabaseSchema.createDailyAccountBalance);
+
+    // 2. Seed the legacy 'UPI' account from existing settings.
+    final settingsRows = await db.rawQuery(
+      "SELECT key, value FROM settings WHERE key IN ('opening_upi', 'app_use_start_date')",
+    );
+    final settingsMap = {
+      for (final row in settingsRows) row['key'] as String: row['value'] as String,
+    };
+    final openingUpi = double.tryParse(settingsMap['opening_upi'] ?? '0') ?? 0.0;
+    final startDate = settingsMap['app_use_start_date'] ??
+        DateTime.now().toIso8601String().substring(0, 10);
+    final now = DateTime.now().toIso8601String();
+
+    final bankAccountId = await db.rawInsert(
+      'INSERT INTO bank_accounts '
+      '(name, opening_balance, start_date, is_default, is_active, created_at, updated_at) '
+      'VALUES (?, ?, ?, 1, 1, ?, ?)',
+      ['UPI', openingUpi, startDate, now, now],
+    );
+
+    // 3. Recreate payments table: rename upi_amount → bank_amount, add bank_account_id.
+    //    The INSERT SELECT backfills bank_account_id for all rows that had upi_amount > 0.
+    await db.execute(
+      DatabaseSchema.createPayments.replaceFirst(
+        'CREATE TABLE IF NOT EXISTS payments',
+        'CREATE TABLE payments_v9',
+      ),
+    );
+    await db.rawInsert(
+      'INSERT INTO payments_v9 '
+      '(id, payment_date, payment_type, sub_category, direction, amount, cash_amount, '
+      ' bank_amount, bank_account_id, pledge_id, notes, created_by, created_at) '
+      'SELECT id, payment_date, payment_type, sub_category, direction, amount, cash_amount, '
+      '       upi_amount, '
+      '       CASE WHEN upi_amount > 0 THEN ? ELSE NULL END, '
+      '       pledge_id, notes, created_by, created_at '
+      'FROM payments',
+      [bankAccountId],
+    );
+    await db.execute('DROP TABLE payments');
+    await db.execute('ALTER TABLE payments_v9 RENAME TO payments');
+
+    // Recreate indexes on payments.
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_payments_pledge_id ON payments(pledge_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(payment_date)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_payments_type ON payments(payment_type)');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_payments_bank_account_id ON payments(bank_account_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_bank_accounts_is_default ON bank_accounts(is_default, is_active)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_daily_account_balance_daily_balance_id '
+      'ON daily_account_balance(daily_balance_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_daily_account_balance_bank_account_id '
+      'ON daily_account_balance(bank_account_id)',
+    );
+
+    // 4. Backfill daily_account_balance from every existing daily_balance row.
+    //    Locked rows get their frozen values; unlocked rows get NULLs (live-calculated going forward).
+    await db.rawInsert(
+      'INSERT INTO daily_account_balance '
+      '(daily_balance_id, bank_account_id, opening_balance, closing_balance, '
+      ' amount_in, amount_out, created_at, updated_at) '
+      'SELECT '
+      '  id, '
+      '  ?, '
+      '  opening_upi, '
+      '  CASE WHEN is_locked = 1 THEN closing_upi ELSE NULL END, '
+      '  CASE WHEN is_locked = 1 THEN upi_in ELSE NULL END, '
+      '  CASE WHEN is_locked = 1 THEN upi_out ELSE NULL END, '
+      '  ?, '
+      '  ? '
+      'FROM daily_balance',
+      [bankAccountId, now, now],
+    );
+
+    // 5. Verify migration integrity (logged to debug console).
+    final dabCount = (await db.rawQuery(
+      'SELECT COUNT(*) as c FROM daily_account_balance',
+    )).first['c'] as int? ?? 0;
+    final dbCount = (await db.rawQuery(
+      'SELECT COUNT(*) as c FROM daily_balance',
+    )).first['c'] as int? ?? 0;
+    final unmappedPayments = (await db.rawQuery(
+      'SELECT COUNT(*) as c FROM payments WHERE bank_amount > 0 AND bank_account_id IS NULL',
+    )).first['c'] as int? ?? 0;
+
+    // ignore: avoid_print
+    print('[v8→v9 migration] daily_balance rows: $dbCount, '
+        'daily_account_balance rows created: $dabCount, '
+        'payments with bank_amount > 0 and null bank_account_id: $unmappedPayments');
+
+    await db.execute('PRAGMA foreign_keys = ON');
   }
 
   static Future<void> _migrateV7toV8(Database db) async {

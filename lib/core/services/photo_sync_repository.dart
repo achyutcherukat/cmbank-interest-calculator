@@ -204,4 +204,32 @@ class PhotoSyncRepository {
     if (rows.isEmpty) return null;
     return PhotoSyncEntry.fromMap(rows.first);
   }
+
+  /// Returns all photo entries for a pledge, filtered by photo type, ordered
+  /// by insertion order. Used by display screens instead of the pledge row's
+  /// (now-deprecated) JSON photo-path columns.
+  Future<List<PhotoSyncEntry>> getByPledge(
+      int pledgeId, String photoType) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'photo_sync_log',
+      where: 'pledge_id = ? AND photo_type = ?',
+      whereArgs: [pledgeId, photoType],
+      orderBy: 'id ASC',
+    );
+    return rows.map(PhotoSyncEntry.fromMap).toList();
+  }
+
+  /// Returns all ID-proof photo entries for a customer, ordered by insertion
+  /// order. Used by display screens instead of customers.id_proof_photo_paths.
+  Future<List<PhotoSyncEntry>> getByCustomer(int customerId) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'photo_sync_log',
+      where: 'customer_id = ? AND photo_type = ?',
+      whereArgs: [customerId, PhotoType.idProof],
+      orderBy: 'id ASC',
+    );
+    return rows.map(PhotoSyncEntry.fromMap).toList();
+  }
 }

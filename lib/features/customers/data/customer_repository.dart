@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:sqflite/sqflite.dart';
 
 import '../../../core/database/app_database.dart';
@@ -21,7 +18,6 @@ class CustomerWithStats {
     this.pinCode,
     this.idProofType,
     this.idProofNumber,
-    this.idProofPhotoPaths,
     required this.createdAt,
     required this.updatedAt,
     this.totalPledges = 0,
@@ -37,31 +33,10 @@ class CustomerWithStats {
   final String? pinCode;
   final String? idProofType;
   final String? idProofNumber;
-  final String? idProofPhotoPaths;
   final String createdAt;
   final String updatedAt;
   final int totalPledges;
   final int activePledges;
-
-  List<File> get photoFiles {
-    if (idProofPhotoPaths == null || idProofPhotoPaths!.isEmpty) return [];
-    try {
-      final paths = (jsonDecode(idProofPhotoPaths!) as List).cast<String>();
-      return paths.map((p) => File(p)).where((f) => f.existsSync()).toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  /// All photo paths including those missing locally (for placeholder display).
-  List<String> get photoPaths {
-    if (idProofPhotoPaths == null || idProofPhotoPaths!.isEmpty) return [];
-    try {
-      return (jsonDecode(idProofPhotoPaths!) as List).cast<String>();
-    } catch (_) {
-      return [];
-    }
-  }
 
   factory CustomerWithStats.fromMap(
     Map<String, dynamic> map, {
@@ -78,7 +53,6 @@ class CustomerWithStats {
       pinCode: map['pin_code'] as String?,
       idProofType: map['id_proof_type'] as String?,
       idProofNumber: map['id_proof_number'] as String?,
-      idProofPhotoPaths: map['id_proof_photo_paths'] as String?,
       createdAt: map['created_at'] as String? ?? '',
       updatedAt: map['updated_at'] as String? ?? '',
       totalPledges: totalPledges,
@@ -198,7 +172,6 @@ class CustomerRepository {
         'pin_code': data.pinCode,
         'id_proof_type': data.idProofType,
         'id_proof_number': data.idNumber,
-        'id_proof_photo_paths': _photoJson(data),
         'created_at': now,
         'updated_at': now,
       },
@@ -224,7 +197,6 @@ class CustomerRepository {
         'pin_code': data.pinCode,
         'id_proof_type': data.idProofType,
         'id_proof_number': data.idNumber,
-        'id_proof_photo_paths': _photoJson(data),
         'updated_at': now,
       },
       where: 'id = ?',
@@ -252,10 +224,6 @@ class CustomerRepository {
     }
     return createCustomer(data);
   }
-
-  String? _photoJson(CustomerDetailsData data) => data.idProofPhotos.isNotEmpty
-      ? jsonEncode(data.idProofPhotos.map((f) => f.path).toList())
-      : null;
 
   // ─── Pledge stats (customer_id only — pledges no longer store phone) ─────────
 

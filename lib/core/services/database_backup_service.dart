@@ -137,6 +137,13 @@ class DatabaseBackupService {
   /// Shared by Drive and local backup.
   Future<Uint8List> _buildEncryptedArchive() async {
     final dbPath = await AppDatabase.instance.databaseFilePath;
+
+    // Flush WAL → main file before reading raw bytes. In WAL mode, recent
+    // writes (markSynced, backup_log) live only in cm_bank.db-wal until a
+    // checkpoint; reading the raw file without this misses those writes.
+    final db = await AppDatabase.instance.database;
+    await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
+
     final dbBytes = await File(dbPath).readAsBytes();
     final checksum = EncryptionService.instance.generateChecksum(dbBytes);
 

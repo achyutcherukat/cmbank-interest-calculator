@@ -1,18 +1,25 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../app/theme.dart';
+import '../../../features/accounts/data/bank_account_model.dart';
+import '../../../features/accounts/data/bank_account_repository.dart';
+import '../../../features/accounts/data/daily_balance_repository.dart';
 import '../../../features/calculator/data/interest_calculator.dart';
 import '../../../features/gold_stock/data/gold_rates_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/restorable_photo_thumb.dart';
 import '../../../shared/widgets/shared_split_payment_widget.dart';
+import '../../../core/services/photo_sync_repository.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
 import '../data/pledge_repository.dart';
+import '../../customers/presentation/customer_detail_screen.dart';
 import 'load_existing_pledge_screen.dart';
 import 'new_pledge_screen.dart';
 
@@ -295,6 +302,10 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
   Map<String, dynamic>? _customer;
   bool _loading = true;
   List<_ChainEntry> _chain = [];
+  List<String> _goldPhotoPaths = [];
+  List<String> _idProofPhotoPaths = [];
+  bool _todayLocked = false;
+  bool _addingPhoto = false;
 
   @override
   void initState() {
@@ -317,23 +328,90 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
 
     final chain = pledge != null ? await _buildChain(pledge) : <_ChainEntry>[];
 
+    final goldPhotos = pledge != null
+        ? await PhotoSyncRepository.instance
+            .getByPledge(pledge.id!, PhotoType.gold)
+        : <PhotoSyncEntry>[];
+    final idProofPhotos = pledge?.customerId != null
+        ? await PhotoSyncRepository.instance
+            .getByCustomer(pledge!.customerId!)
+        : <PhotoSyncEntry>[];
+
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final todayLocked =
+        await DailyBalanceRepository.instance.isDateLocked(today);
+
     if (mounted) {
       setState(() {
         _pledge = pledge;
         _items = items;
         _customer = customer;
         _chain = chain;
+        _goldPhotoPaths = goldPhotos.map((e) => e.localPath).toList();
+        _idProofPhotoPaths = idProofPhotos.map((e) => e.localPath).toList();
+        _todayLocked = todayLocked;
         _loading = false;
       });
     }
   }
 
-  List<String> _parsePhotoPaths(String? json) {
-    if (json == null || json.isEmpty) return [];
+  Future<void> _addGoldPhoto() async {
+    final pledge = _pledge;
+    if (pledge == null) return;
+    setState(() => _addingPhoto = true);
     try {
-      return (jsonDecode(json) as List).cast<String>();
-    } catch (_) {
-      return [];
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        imageQuality: 80,
+        maxWidth: 1600,
+      );
+      if (picked == null || !mounted) return;
+
+      final cropped = await ImageCropper().cropImage(
+        sourcePath: picked.path,
+        compressQuality: 85,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Photo',
+            toolbarColor: CMBColors.navy,
+            toolbarWidgetColor: CMBColors.goldRich,
+            lockAspectRatio: false,
+            hideBottomControls: true,
+          ),
+          IOSUiSettings(title: 'Crop Photo'),
+        ],
+      );
+      if (cropped == null || !mounted) return;
+
+      final docsDir = await getApplicationDocumentsDirectory();
+      final destDir = Directory('${docsDir.path}/pledge_photos');
+      await destDir.create(recursive: true);
+
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final prefix = pledge.pledgeNumber.isNotEmpty
+          ? pledge.pledgeNumber
+          : 'pledge';
+      final dest = File('${destDir.path}/${prefix}_item_$ts.jpg');
+      await File(cropped.path).copy(dest.path);
+
+      await PhotoSyncRepository.instance.insertPhoto(
+        pledgeId: pledge.id!,
+        photoType: PhotoType.gold,
+        localPath: dest.path,
+      );
+
+      if (mounted) {
+        setState(() => _goldPhotoPaths = [..._goldPhotoPaths, dest.path]);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not take photo: $e'),
+          backgroundColor: CMBColors.warningRed,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _addingPhoto = false);
     }
   }
 
@@ -524,7 +602,7 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
 
     final totalGross = _items.fold<double>(0, (s, it) => s + it.grossWeight);
     final totalNet = _items.fold<double>(0, (s, it) => s + it.netWeight);
-    final goldPhotos = p.goldPhotoPaths ?? [];
+    final goldPhotos = _goldPhotoPaths;
 
     return Scaffold(
       backgroundColor: FlowColors.bg,
@@ -599,16 +677,16 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
           // Item Details (one card per item)
           for (int i = 0; i < _items.length; i++)
             FlowCard(
-              header: _items.length == 1 ? 'Item Details' : 'Item ${i + 1}',
+              header: _items.length == 1 ? 'Item Details' : 'Item List ${i + 1}',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (_items[i].itemType.isNotEmpty &&
                       _items[i].itemType != 'Other')
                     DetailRow(
-                        label: 'Type', value: _items[i].itemType),
+                        label: 'Item Types', value: _items[i].itemType),
                   DetailRow(
-                      label: 'Quantity', value: '${_items[i].quantity}'),
+                      label: 'Total Quantity', value: '${_items[i].quantity}'),
                   if (_items[i].grossWeight > 0)
                     DetailRow(
                         label: 'Gross Weight',
@@ -642,26 +720,30 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                 DetailRow(
                     label: 'Total Net Weight',
                     value: '${totalNet.toStringAsFixed(2)} g',
-                    isLast: goldPhotos.isEmpty),
-                if (goldPhotos.isNotEmpty) ...[
+                    isLast: goldPhotos.isEmpty && _todayLocked),
+                if (goldPhotos.isNotEmpty || !_todayLocked) ...[
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 12,
                     runSpacing: 8,
-                    children:
-                        goldPhotos
-                        .map((ph) => RestorablePhotoThumb(
-                              localPath: ph,
-                              width: 100,
-                              height: 80,
-                              onView: (p) => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) =>
-                                        _PhotoViewScreen(file: File(p))),
-                              ),
-                            ))
-                        .toList(),
+                    children: [
+                      ...goldPhotos.map((ph) => RestorablePhotoThumb(
+                            localPath: ph,
+                            width: 100,
+                            height: 80,
+                            onView: (p) => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) =>
+                                      _PhotoViewScreen(file: File(p))),
+                            ),
+                          )),
+                      if (!_todayLocked)
+                        _AddPhotoButton(
+                          onTap: _addingPhoto ? null : _addGoldPhoto,
+                          loading: _addingPhoto,
+                        ),
+                    ],
                   ),
                 ],
               ],
@@ -670,10 +752,7 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
 
           // Customer Details
           () {
-            final idProofPhotos = _customer != null
-                ? _parsePhotoPaths(
-                        _customer!['id_proof_photo_paths'] as String?)
-                : <String>[];
+            final idProofPhotos = _idProofPhotoPaths;
             final addr = _customer != null
                 ? formatCustomerAddress(
                     address: _customer!['address'] as String?,
@@ -688,6 +767,16 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                 (_customer?['id_proof_number'] as String?) ?? '';
             return FlowCard(
               header: 'Customer Details',
+              onTap: _customer != null
+                  ? () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => CustomerDetailScreen(
+                            customerId: _customer!['id'] as int,
+                          ),
+                        ),
+                      )
+                  : null,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -947,6 +1036,57 @@ class _PhotoViewScreen extends StatelessWidget {
   }
 }
 
+// ─── Add Photo Button ─────────────────────────────────────────────────────────
+
+class _AddPhotoButton extends StatelessWidget {
+  const _AddPhotoButton({this.onTap, this.loading = false});
+  final VoidCallback? onTap;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 100,
+        height: 80,
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: CMBColors.navy.withValues(alpha: 0.35),
+            width: 1.5,
+          ),
+          borderRadius: BorderRadius.circular(8),
+          color: CMBColors.warmWhite,
+        ),
+        child: loading
+            ? const Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.camera_alt_outlined,
+                      color: CMBColors.navy, size: 26),
+                  SizedBox(height: 4),
+                  Text(
+                    'Add Photo',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: CMBColors.navy,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
 // ─── Close Pledge Screen ──────────────────────────────────────────────────────
 
 class ClosePledgeScreen extends StatefulWidget {
@@ -966,6 +1106,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
   bool _isSaving = false;
   String? _donePledgeNo;
   double? _doneTotal;
+  List<BankAccount> _bankAccounts = const [];
 
   late final double _interest;
   late final double _total;
@@ -983,6 +1124,12 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
     );
     _interest = calc.interest;
     _total = calc.total;
+    _loadBankAccounts();
+  }
+
+  Future<void> _loadBankAccounts() async {
+    final accounts = await BankAccountRepository.instance.getActive();
+    if (mounted) setState(() => _bankAccounts = accounts);
   }
 
   String? get _contextIso =>
@@ -1179,14 +1326,15 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
     try {
       final payState = _payKey.currentState;
       final cashAmt = payState?.cashAmount ?? _total;
-      final upiAmt = payState?.upiAmount ?? 0;
+      final bankAmt = payState?.bankAmount ?? 0;
 
       await PledgeRepository.instance.closePledge(
         pledgeId: widget.pledge.id!,
         totalInterestPaid: _interest,
         totalAmountCollected: _total,
         cashAmount: cashAmt,
-        upiAmount: upiAmt,
+        bankAmount: bankAmt,
+        bankAccountId: payState?.bankAccountId,
         contextDate: _contextIso,
       );
 
@@ -1252,6 +1400,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
             key: _payKey,
             total: _total,
             totalLabel: 'Total Due',
+            bankAccounts: _bankAccounts,
           ),
           const SizedBox(height: 20),
           SizedBox(
@@ -1541,12 +1690,34 @@ class __RenewPledgeScreenState extends State<_RenewPledgeScreen> {
   String _sub = 'pay';
   late TextEditingController _amtCtrl;
   final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
+  List<BankAccount> _bankAccounts = const [];
+  List<PledgeItemModel> _pledgeItems = [];
 
   @override
   void initState() {
     super.initState();
     _amtCtrl = TextEditingController(
         text: formatIndian(widget.pledge.loanAmount.round().toString()));
+    _loadBankAccounts();
+    _loadPledgeItems();
+  }
+
+  Future<void> _loadBankAccounts() async {
+    final accounts = await BankAccountRepository.instance.getActive();
+    if (mounted) setState(() => _bankAccounts = accounts);
+  }
+
+  Future<void> _loadPledgeItems() async {
+    if (widget.pledge.id == null) return;
+    final items = await PledgeRepository.instance.getItemsForPledge(widget.pledge.id!);
+    if (mounted) setState(() => _pledgeItems = items);
+  }
+
+  String _bankLabel(int? id) {
+    if (id == null) return 'Bank';
+    final match = _bankAccounts.cast<BankAccount?>()
+        .firstWhere((a) => a?.id == id, orElse: () => null);
+    return match != null ? 'Bank (${match.name})' : 'Bank';
   }
 
   @override
@@ -1569,8 +1740,9 @@ class __RenewPledgeScreenState extends State<_RenewPledgeScreen> {
 
     final payState = _payKey.currentState;
     final cashAmt = payState?.cashAmount ?? widget.interest;
-    final upiAmt = payState?.upiAmount ?? 0;
+    final bankAmt = payState?.bankAmount ?? 0;
     final payMode = payState?.mode ?? 'cash';
+    final bankAccountId = payState?.bankAccountId;
 
     Navigator.push(
       context,
@@ -1598,16 +1770,33 @@ class __RenewPledgeScreenState extends State<_RenewPledgeScreen> {
             if (_sub == 'pay')
               _SummarySection('Payment Details', [
                 _SR('Customer Pays', money(widget.interest)),
-                _SR('Payment Mode', payMode.toUpperCase()),
+                _SR('Payment Mode', payMode == 'bank'
+                    ? _bankLabel(bankAccountId).toUpperCase()
+                    : payMode.toUpperCase()),
                 if (payMode == 'split') ...[
                   _SR('Cash', money(cashAmt)),
-                  _SR('UPI', money(upiAmt)),
+                  _SR(_bankLabel(bankAccountId), money(bankAmt)),
                 ],
               ]),
+            ..._pledgeItems.asMap().entries.map((e) {
+              final it = e.value;
+              final label = _pledgeItems.length == 1 ? 'Item Details' : 'Item ${e.key + 1}';
+              return _SummarySection(label, [
+                if (it.itemType != 'Other') _SR('Type', it.itemType),
+                _SR('Quantity', '${it.quantity}'),
+                if (it.grossWeight > 0)
+                  _SR('Gross Weight', '${it.grossWeight.toStringAsFixed(2)} g'),
+                if (it.netWeight > 0)
+                  _SR('Net Weight', '${it.netWeight.toStringAsFixed(2)} g'),
+                if (it.purity.isNotEmpty) _SR('Purity', it.purity),
+                if (it.notes != null && it.notes!.isNotEmpty) _SR('Notes', it.notes!),
+              ]);
+            }),
             _SummarySection('Gold Details', [
-              _SR('Net Weight',
+              _SR('Total Gross Weight',
+                  '${widget.pledge.grossWeight.toStringAsFixed(2)} g'),
+              _SR('Total Net Weight',
                   '${widget.pledge.netWeight.toStringAsFixed(2)} g'),
-              _SR('Purity', widget.pledge.purity),
             ]),
             if (widget.pledge.customerName.isNotEmpty)
               _SummarySection('Customer Details', [
@@ -1629,7 +1818,8 @@ class __RenewPledgeScreenState extends State<_RenewPledgeScreen> {
                 newPrincipal: newAmt,
                 interest: widget.interest,
                 cashAmount: cashAmt,
-                upiAmount: upiAmt,
+                bankAmount: bankAmt,
+                bankAccountId: bankAccountId,
                 contextDate: ctxIso,
               );
             }
@@ -1702,6 +1892,7 @@ class __RenewPledgeScreenState extends State<_RenewPledgeScreen> {
               key: _payKey,
               total: widget.interest,
               totalLabel: 'Interest to Collect',
+              bankAccounts: _bankAccounts,
             ),
           ],
           _renewProceedBtn(_proceed),
@@ -1733,6 +1924,8 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
   String _sub = 'separate';
   final _amtCtrl = TextEditingController();
   final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
+  List<BankAccount> _bankAccounts = const [];
+  List<PledgeItemModel> _pledgeItems = [];
 
   double get _ppAmt => double.tryParse(_amtCtrl.text.replaceAll(',', '')) ?? 0;
   double get _ppPrincipalPaid => _sub == 'separate'
@@ -1747,6 +1940,31 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
     }
     return (widget.pledge.loanAmount - _ppPrincipalPaid)
         .clamp(0.0, double.infinity);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBankAccounts();
+    _loadPledgeItems();
+  }
+
+  Future<void> _loadBankAccounts() async {
+    final accounts = await BankAccountRepository.instance.getActive();
+    if (mounted) setState(() => _bankAccounts = accounts);
+  }
+
+  Future<void> _loadPledgeItems() async {
+    if (widget.pledge.id == null) return;
+    final items = await PledgeRepository.instance.getItemsForPledge(widget.pledge.id!);
+    if (mounted) setState(() => _pledgeItems = items);
+  }
+
+  String _bankLabel(int? id) {
+    if (id == null) return 'Bank';
+    final match = _bankAccounts.cast<BankAccount?>()
+        .firstWhere((a) => a?.id == id, orElse: () => null);
+    return match != null ? 'Bank (${match.name})' : 'Bank';
   }
 
   @override
@@ -1766,8 +1984,9 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
 
     final payState = _payKey.currentState;
     final cashAmt = payState?.cashAmount ?? _ppTotalPay;
-    final upiAmt = payState?.upiAmount ?? 0;
+    final bankAmt = payState?.bankAmount ?? 0;
     final payMode = payState?.mode ?? 'cash';
+    final bankAccountId = payState?.bankAccountId;
     final intPaid =
         _sub == 'separate' ? widget.interest : _ppAmt.clamp(0.0, widget.interest);
     final unpaidInt = (_sub == 'fixed' && _ppAmt < widget.interest)
@@ -1802,16 +2021,33 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
             ]),
             _SummarySection('Payment Details', [
               _SR('Total Collected', money(ppTotalPay)),
-              _SR('Payment Mode', payMode.toUpperCase()),
+              _SR('Payment Mode', payMode == 'bank'
+                  ? _bankLabel(bankAccountId).toUpperCase()
+                  : payMode.toUpperCase()),
               if (payMode == 'split') ...[
                 _SR('Cash', money(cashAmt)),
-                _SR('UPI', money(upiAmt)),
+                _SR(_bankLabel(bankAccountId), money(bankAmt)),
               ],
             ]),
+            ..._pledgeItems.asMap().entries.map((e) {
+              final it = e.value;
+              final label = _pledgeItems.length == 1 ? 'Item Details' : 'Item ${e.key + 1}';
+              return _SummarySection(label, [
+                if (it.itemType != 'Other') _SR('Type', it.itemType),
+                _SR('Quantity', '${it.quantity}'),
+                if (it.grossWeight > 0)
+                  _SR('Gross Weight', '${it.grossWeight.toStringAsFixed(2)} g'),
+                if (it.netWeight > 0)
+                  _SR('Net Weight', '${it.netWeight.toStringAsFixed(2)} g'),
+                if (it.purity.isNotEmpty) _SR('Purity', it.purity),
+                if (it.notes != null && it.notes!.isNotEmpty) _SR('Notes', it.notes!),
+              ]);
+            }),
             _SummarySection('Gold Details', [
-              _SR('Net Weight',
+              _SR('Total Gross Weight',
+                  '${widget.pledge.grossWeight.toStringAsFixed(2)} g'),
+              _SR('Total Net Weight',
                   '${widget.pledge.netWeight.toStringAsFixed(2)} g'),
-              _SR('Purity', widget.pledge.purity),
             ]),
             if (widget.pledge.customerName.isNotEmpty)
               _SummarySection('Customer Details', [
@@ -1834,7 +2070,8 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
                 interest: widget.interest,
                 totalPaid: ppTotalPay,
                 cashAmount: cashAmt,
-                upiAmount: upiAmt,
+                bankAmount: bankAmt,
+                bankAccountId: bankAccountId,
                 contextDate: ctxIso,
               );
             }
@@ -1844,7 +2081,8 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
               interest: widget.interest,
               fixedAmount: ppAmt,
               cashAmount: cashAmt,
-              upiAmount: upiAmt,
+              bankAmount: bankAmt,
+              bankAccountId: bankAccountId,
               contextDate: ctxIso,
             );
           },
@@ -1944,6 +2182,7 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
               key: _payKey,
               total: _ppTotalPay,
               totalLabel: 'Total to Collect',
+              bankAccounts: _bankAccounts,
             ),
           ],
           _renewProceedBtn(_proceed),
@@ -1976,6 +2215,8 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
   String _intSub = 'pay';
   final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
   double? _currentPledgeRate;
+  List<BankAccount> _bankAccounts = const [];
+  List<PledgeItemModel> _pledgeItems = [];
 
   double get _ilNewAmt =>
       double.tryParse(_amtCtrl.text.replaceAll(',', '')) ??
@@ -1997,6 +2238,26 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
         setState(() => _currentPledgeRate = rates.pledgeRate);
       }
     });
+    _loadBankAccounts();
+    _loadPledgeItems();
+  }
+
+  Future<void> _loadBankAccounts() async {
+    final accounts = await BankAccountRepository.instance.getActive();
+    if (mounted) setState(() => _bankAccounts = accounts);
+  }
+
+  Future<void> _loadPledgeItems() async {
+    if (widget.pledge.id == null) return;
+    final items = await PledgeRepository.instance.getItemsForPledge(widget.pledge.id!);
+    if (mounted) setState(() => _pledgeItems = items);
+  }
+
+  String _bankLabel(int? id) {
+    if (id == null) return 'Bank';
+    final match = _bankAccounts.cast<BankAccount?>()
+        .firstWhere((a) => a?.id == id, orElse: () => null);
+    return match != null ? 'Bank (${match.name})' : 'Bank';
   }
 
   @override
@@ -2028,8 +2289,9 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
 
     final payState = _payKey.currentState;
     final cashAmt = nd > 0 ? (payState?.cashAmount ?? nd) : 0.0;
-    final upiAmt = nd > 0 ? (payState?.upiAmount ?? 0) : 0.0;
+    final bankAmt = nd > 0 ? (payState?.bankAmount ?? 0) : 0.0;
     final payMode = nd > 0 ? (payState?.mode ?? 'cash') : 'cash';
+    final bankAccountId = nd > 0 ? payState?.bankAccountId : null;
     final ilFinal = _ilFinalAmt;
     final ilNewAmt = _ilNewAmt;
     final intSub = _intSub;
@@ -2062,16 +2324,33 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
             if (nd > 0)
               _SummarySection('Payment Details', [
                 _SR('Amount to Give Customer', money(nd)),
-                _SR('Payment Mode', payMode.toUpperCase()),
+                _SR('Payment Mode', payMode == 'bank'
+                    ? _bankLabel(bankAccountId).toUpperCase()
+                    : payMode.toUpperCase()),
                 if (payMode == 'split') ...[
                   _SR('Cash', money(cashAmt)),
-                  _SR('UPI', money(upiAmt)),
+                  _SR(_bankLabel(bankAccountId), money(bankAmt)),
                 ],
               ]),
+            ..._pledgeItems.asMap().entries.map((e) {
+              final it = e.value;
+              final label = _pledgeItems.length == 1 ? 'Item Details' : 'Item ${e.key + 1}';
+              return _SummarySection(label, [
+                if (it.itemType != 'Other') _SR('Type', it.itemType),
+                _SR('Quantity', '${it.quantity}'),
+                if (it.grossWeight > 0)
+                  _SR('Gross Weight', '${it.grossWeight.toStringAsFixed(2)} g'),
+                if (it.netWeight > 0)
+                  _SR('Net Weight', '${it.netWeight.toStringAsFixed(2)} g'),
+                if (it.purity.isNotEmpty) _SR('Purity', it.purity),
+                if (it.notes != null && it.notes!.isNotEmpty) _SR('Notes', it.notes!),
+              ]);
+            }),
             _SummarySection('Gold Details', [
-              _SR('Net Weight',
+              _SR('Total Gross Weight',
+                  '${widget.pledge.grossWeight.toStringAsFixed(2)} g'),
+              _SR('Total Net Weight',
                   '${widget.pledge.netWeight.toStringAsFixed(2)} g'),
-              _SR('Purity', widget.pledge.purity),
             ]),
             if (widget.pledge.customerName.isNotEmpty)
               _SummarySection('Customer Details', [
@@ -2094,7 +2373,8 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
                 interest: widget.interest,
                 extraCashOut: nd,
                 cashAmount: cashAmt,
-                upiAmount: upiAmt,
+                bankAmount: bankAmt,
+                bankAccountId: bankAccountId,
                 contextDate: ctxIso,
               );
             }
@@ -2104,7 +2384,8 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
               interest: widget.interest,
               extraCashOut: nd,
               cashAmount: cashAmt,
-              upiAmount: upiAmt,
+              bankAmount: bankAmt,
+              bankAccountId: bankAccountId,
               contextDate: ctxIso,
             );
           },
@@ -2228,6 +2509,8 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
               key: _payKey,
               total: nd,
               totalLabel: 'Amount to give customer',
+              bankAccounts: _bankAccounts,
+              isMoneyIn: false,
             ),
           ],
           _renewProceedBtn(_proceed),

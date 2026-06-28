@@ -644,59 +644,65 @@ class _HomeScreenState extends State<HomeScreen> {
     final dateStr = '${now.day.toString().padLeft(2, '0')}/'
         '${now.month.toString().padLeft(2, '0')}/${now.year}';
 
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
+    void openCashBook() => Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const DailyAccountsScreen()),
         ).then((_) => _loadTodayAccounts());
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: _navy,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: CMBColors.borderOnNavy, width: 0.5),
-        ),
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Text("TODAY'S ACCOUNTS",
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: _gold,
-                        letterSpacing: 1.2)),
-                const Spacer(),
-                Text(dateStr,
-                    style: const TextStyle(
-                        fontSize: 11, color: CMBColors.textOnNavyMuted)),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _navy,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: CMBColors.borderOnNavy, width: 0.5),
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text("TODAY'S ACCOUNTS",
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _gold,
+                      letterSpacing: 1.2)),
+              const Spacer(),
+              Text(dateStr,
+                  style: const TextStyle(
+                      fontSize: 11, color: CMBColors.textOnNavyMuted)),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: openCashBook,
                   child: _accountCol(
                     icon: Icons.account_balance_wallet,
                     label: 'Cash',
                     value: _todayCash,
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: GestureDetector(
+                  onTap: openCashBook,
                   child: _accountCol(
-                    icon: Icons.phone_android,
-                    label: 'UPI',
+                    icon: Icons.account_balance,
+                    label: 'Bank',
                     value: _todayUpi,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Center(
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          GestureDetector(
+            onTap: openCashBook,
+            child: Center(
               child: Text(
                 '→ Tap to open cash book',
                 style: TextStyle(
@@ -705,8 +711,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontWeight: FontWeight.w500),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -6,6 +6,8 @@ class DatabaseTables {
   static const pledgeItems = 'pledge_items';
   static const payments = 'payments';
   static const dailyBalance = 'daily_balance';
+  static const bankAccounts = 'bank_accounts';
+  static const dailyAccountBalance = 'daily_account_balance';
   static const dayReconciliation = 'day_reconciliation';
   static const dailyStock = 'daily_stock';
   static const stockAdjustments = 'stock_adjustments';
@@ -124,11 +126,40 @@ CREATE TABLE IF NOT EXISTS payments (
     CHECK(direction IN ('in','out')),
   amount REAL NOT NULL DEFAULT 0,
   cash_amount REAL NOT NULL DEFAULT 0,
-  upi_amount REAL NOT NULL DEFAULT 0,
+  bank_amount REAL NOT NULL DEFAULT 0,
+  bank_account_id INTEGER REFERENCES bank_accounts(id),
   pledge_id INTEGER REFERENCES pledges(id),
   notes TEXT,
   created_by INTEGER REFERENCES users(id),
   created_at DATETIME NOT NULL
+)
+''';
+
+  static const createBankAccounts = '''
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  opening_balance REAL NOT NULL DEFAULT 0,
+  start_date DATE NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL
+)
+''';
+
+  static const createDailyAccountBalance = '''
+CREATE TABLE IF NOT EXISTS daily_account_balance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  daily_balance_id INTEGER NOT NULL REFERENCES daily_balance(id),
+  bank_account_id INTEGER NOT NULL REFERENCES bank_accounts(id),
+  opening_balance REAL NOT NULL DEFAULT 0,
+  closing_balance REAL,
+  amount_in REAL,
+  amount_out REAL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  UNIQUE(daily_balance_id, bank_account_id)
 )
 ''';
 
@@ -345,6 +376,10 @@ CREATE TABLE IF NOT EXISTS calc_history (
     'CREATE INDEX IF NOT EXISTS idx_payments_pledge_id ON payments(pledge_id)',
     'CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(payment_date)',
     'CREATE INDEX IF NOT EXISTS idx_payments_type ON payments(payment_type)',
+    'CREATE INDEX IF NOT EXISTS idx_payments_bank_account_id ON payments(bank_account_id)',
+    'CREATE INDEX IF NOT EXISTS idx_bank_accounts_is_default ON bank_accounts(is_default, is_active)',
+    'CREATE INDEX IF NOT EXISTS idx_daily_account_balance_daily_balance_id ON daily_account_balance(daily_balance_id)',
+    'CREATE INDEX IF NOT EXISTS idx_daily_account_balance_bank_account_id ON daily_account_balance(bank_account_id)',
     'CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)',
     'CREATE INDEX IF NOT EXISTS idx_photo_sync_log_synced ON photo_sync_log(is_synced)',
   ];
@@ -374,8 +409,10 @@ CREATE TABLE IF NOT EXISTS calc_history (
     createCustomers,
     createPledges,
     createPledgeItems,
+    createBankAccounts,
     createPayments,
     createDailyBalance,
+    createDailyAccountBalance,
     createDayReconciliation,
     createDailyStock,
     createStockAdjustments,

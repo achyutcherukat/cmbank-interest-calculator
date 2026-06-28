@@ -9,11 +9,15 @@ import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/shared_customer_details_step.dart';
 import '../../../shared/widgets/shared_item_details_step.dart';
+import '../../../shared/widgets/shared_split_payment_widget.dart';
+import '../../accounts/data/bank_account_model.dart';
+import '../../accounts/data/bank_account_repository.dart';
 import '../../customers/data/customer_repository.dart';
 import '../../gold_stock/data/gold_rates_repository.dart';
 import '../data/payment_model.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
+import '../../../core/services/photo_sync_repository.dart';
 import '../data/pledge_repository.dart';
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
@@ -67,12 +71,17 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   // ── Step 3 — Items ───────────────────────────────────────────────────────────
   final _itemsKey = GlobalKey<SharedItemDetailsStepState>();
   ItemDetailsData? _capturedItems;
+  // Form photo paths for the existing pledge (edit mode only). Loaded from
+  // photo_sync_log in _prefillForEdit() so the editPledge() call can pass them.
+  List<String> _existingFormPhotoPaths = [];
 
   // ── Step 4 — Payment ─────────────────────────────────────────────────────────
+  final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
   String _paymentMode = 'cash';
   final _cashCtrl = TextEditingController();
-  final _upiCtrl = TextEditingController();
-  bool _updatingPayment = false;
+  final _bankCtrl = TextEditingController();
+  List<BankAccount> _bankAccounts = const [];
+  int? _selectedBankAccountId;
 
   // ── Save state ───────────────────────────────────────────────────────────────
   bool _isSaving = false;
@@ -103,8 +112,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     _netWeightCtrl.addListener(() => setState(() {}));
     _pledgeRateCtrl.addListener(() => setState(() {}));
     _loanAmtCtrl.addListener(() => setState(() {}));
-    _cashCtrl.addListener(_onCashChanged);
-    _upiCtrl.addListener(_onUpiChanged);
+    _loadBankAccounts();
   }
 
   Future<void> _prefillForEdit() async {
@@ -121,11 +129,13 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     // Pre-fill customer from the customer row
     final row = widget.existingCustomerRow;
     if (row != null) {
+      final customerId = row['id'] as int?;
       List<File> idPhotos = [];
-      try {
-        final paths = jsonDecode(row['id_proof_photo_paths'] as String? ?? '[]') as List;
-        idPhotos = paths.map((e) => File(e as String)).toList();
-      } catch (_) {}
+      if (customerId != null) {
+        final syncEntries =
+            await PhotoSyncRepository.instance.getByCustomer(customerId);
+        idPhotos = syncEntries.map((e) => File(e.localPath)).toList();
+      }
       _capturedCustomer = CustomerDetailsData(
         phone: (row['phone'] as String?) ?? '',
         name: (row['name'] as String?) ?? '',
@@ -133,16 +143,26 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         idProofType: (row['id_proof_type'] as String?) ?? 'None',
         idNumber: (row['id_proof_number'] as String?) ?? '',
         idProofPhotos: idPhotos,
-        existingCustomerId: row['id'] as int?,
+        existingCustomerId: customerId,
         pinCode: row['pin_code'] as String?,
         district: row['district'] as String?,
         state: row['state'] as String?,
       );
     }
 
-    // Pre-fill items + gold photos
+    // Pre-fill items + gold photos from photo_sync_log
+    final formEntries = p.id != null
+        ? await PhotoSyncRepository.instance
+            .getByPledge(p.id!, PhotoType.document)
+        : <PhotoSyncEntry>[];
+    _existingFormPhotoPaths = formEntries.map((e) => e.localPath).toList();
+
+    final goldEntries = p.id != null
+        ? await PhotoSyncRepository.instance.getByPledge(p.id!, PhotoType.gold)
+        : <PhotoSyncEntry>[];
+    final goldPhotos = goldEntries.map((e) => File(e.localPath)).toList();
+
     final items = widget.existingItems ?? [];
-    final goldPhotos = (p.goldPhotoPaths ?? []).map((ph) => File(ph)).toList();
     _capturedItems = ItemDetailsData(
       items: items
           .map((it) => ItemEntryData(
@@ -174,22 +194,25 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
           direction: PaymentDirection.outward,
           amount: p.loanAmount,
           cashAmount: p.loanAmount,
-          upiAmount: 0,
+          bankAmount: 0,
           createdAt: p.pledgeDate,
         ),
       );
       if (mounted) {
         setState(() {
           final cash = disbursal.cashAmount;
-          final upi = disbursal.upiAmount;
-          if (upi <= 0) {
+          final bank = disbursal.bankAmount;
+          if (bank <= 0) {
             _paymentMode = 'cash';
           } else if (cash <= 0) {
-            _paymentMode = 'upi';
+            _paymentMode = 'bank';
           } else {
             _paymentMode = 'split';
             _cashCtrl.text = formatIndian(cash.round().toString());
-            _upiCtrl.text = formatIndian(upi.round().toString());
+            _bankCtrl.text = formatIndian(bank.round().toString());
+          }
+          if (disbursal.bankAccountId != null) {
+            _selectedBankAccountId = disbursal.bankAccountId;
           }
         });
       }
@@ -206,7 +229,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     _netFocus.dispose();
     _loanAmtFocus.dispose();
     _cashCtrl.dispose();
-    _upiCtrl.dispose();
+    _bankCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -227,26 +250,19 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     }
   }
 
-  // ── Split payment auto-fill ──────────────────────────────────────────────────
-
-  void _onCashChanged() {
-    if (_updatingPayment || _paymentMode != 'split') return;
-    _updatingPayment = true;
-    final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
-    final rem = _loanAmount - cash;
-    if (rem >= 0) _upiCtrl.text = formatIndian(rem.round().toString());
-    _updatingPayment = false;
-    setState(() {});
-  }
-
-  void _onUpiChanged() {
-    if (_updatingPayment || _paymentMode != 'split') return;
-    _updatingPayment = true;
-    final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
-    final rem = _loanAmount - upi;
-    if (rem >= 0) _cashCtrl.text = formatIndian(rem.round().toString());
-    _updatingPayment = false;
-    setState(() {});
+  Future<void> _loadBankAccounts() async {
+    final accounts = await BankAccountRepository.instance.getActive();
+    if (mounted) {
+      setState(() {
+        _bankAccounts = accounts;
+        if (_selectedBankAccountId == null) {
+          final def = accounts.cast<BankAccount?>()
+              .firstWhere((a) => a?.isDefault == true, orElse: () => null);
+          _selectedBankAccountId =
+              (def ?? (accounts.isNotEmpty ? accounts.first : null))?.id;
+        }
+      });
+    }
   }
 
   // ── Navigation ───────────────────────────────────────────────────────────────
@@ -344,7 +360,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     }
     if (_paymentMode == 'split') {
       final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
-      final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
+      final upi = double.tryParse(_bankCtrl.text.replaceAll(',', '')) ?? 0;
       if ((cash + upi - _loanAmount).abs() > 0.5) {
         _showError(
             'Cash + UPI (${money(cash + upi)}) must equal loan amount (${money(_loanAmount)}).');
@@ -424,13 +440,13 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
 
       // ── Payment amounts ──────────────────────────────────────────────────────
       double cashAmt = _loanAmount;
-      double upiAmt = 0;
-      if (_paymentMode == 'upi') {
+      double bankAmt = 0;
+      if (_paymentMode == 'bank') {
         cashAmt = 0;
-        upiAmt = _loanAmount;
+        bankAmt = _loanAmount;
       } else if (_paymentMode == 'split') {
         cashAmt = double.tryParse(_cashCtrl.text.replaceAll(',', '').trim()) ?? 0;
-        upiAmt = double.tryParse(_upiCtrl.text.replaceAll(',', '').trim()) ?? 0;
+        bankAmt = double.tryParse(_bankCtrl.text.replaceAll(',', '').trim()) ?? 0;
       }
 
       // ── Save pledge ──────────────────────────────────────────────────────────
@@ -456,7 +472,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         pledge,
         pledgeItems,
         cashAmount: cashAmt,
-        upiAmount: upiAmt,
+        bankAmount: bankAmt,
+        bankAccountId: _selectedBankAccountId,
         contextDate: widget.contextDate != null ? dateStr : null,
       );
 
@@ -689,6 +706,11 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
             _advanceTo(4);
           },
           () {
+            final validationError = _itemsKey.currentState?.validate();
+            if (validationError != null) {
+              _showError(validationError);
+              return;
+            }
             final data = _itemsKey.currentState?.getData();
             if (data != null && data.items.isNotEmpty) {
               final totalGross =
@@ -719,123 +741,56 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   // ─── Step 4: Payment Mode ────────────────────────────────────────────────────
 
   Widget _buildStep4() {
-    final cash = double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
-    final upi = double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
-    final splitTotal = cash + upi;
-    final splitOk =
-        (_paymentMode != 'split') || (splitTotal - _loanAmount).abs() < 0.5;
+    final initCash = _paymentMode == 'split'
+        ? (double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0)
+        : null;
+    final initBank = _paymentMode == 'split'
+        ? (double.tryParse(_bankCtrl.text.replaceAll(',', '')) ?? 0)
+        : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _SectionHeader('Payment Mode'),
-        FlowCard(
-          backgroundColor: FlowColors.accent,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('Loan Amount',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black54)),
-              Text(money(_loanAmount),
-                  style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: FlowColors.primary)),
-            ],
-          ),
+        SharedSplitPaymentWidget(
+          key: _payKey,
+          total: _loanAmount,
+          totalLabel: 'Loan Amount',
+          bankAccounts: _bankAccounts,
+          isMoneyIn: false,
+          initialMode: _paymentMode,
+          initialCashAmount: initCash,
+          initialBankAmount: initBank,
+          initialBankAccountId: _selectedBankAccountId,
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(child: _modeBtn('cash', 'CASH', Icons.payments)),
-            const SizedBox(width: 10),
-            Expanded(
-                child: _modeBtn('upi', 'UPI', Icons.qr_code_scanner)),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _modeBtn('split', 'SPLIT  (Cash + UPI)', Icons.call_split),
-        if (_paymentMode == 'split') ...[
-          const SizedBox(height: 16),
-          _numberField('Cash Amount (₹)', _cashCtrl, prefixText: '₹ ', indianFormat: true),
-          _numberField('UPI Amount (₹)', _upiCtrl, prefixText: '₹ ', indianFormat: true),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: splitOk ? FlowColors.greenLight : FlowColors.redLight,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: splitOk ? FlowColors.green : FlowColors.red),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Total: ${money(splitTotal)}',
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w600)),
-                Icon(splitOk ? Icons.check_circle : Icons.cancel,
-                    color: splitOk ? FlowColors.green : FlowColors.red,
-                    size: 20),
-              ],
-            ),
-          ),
-        ],
         const SizedBox(height: 28),
         _proceedBtn(() {
-          if (_paymentMode == 'split' && !splitOk) {
-            _showError(
-                'Cash + UPI must equal loan amount (${money(_loanAmount)}).');
-            return;
-          }
+          final payState = _payKey.currentState;
+          final err = payState?.validate();
+          if (err != null) { _showError(err); return; }
+          // Capture before widget leaves the tree
+          _paymentMode = payState?.mode ?? 'cash';
+          final ca = payState?.cashAmount ?? _loanAmount;
+          final ba = payState?.bankAmount ?? 0;
+          _cashCtrl.text = ca > 0 ? formatIndian(ca.round().toString()) : '';
+          _bankCtrl.text = ba > 0 ? formatIndian(ba.round().toString()) : '';
+          _selectedBankAccountId = payState?.bankAccountId;
           _advanceTo(5);
         }),
       ],
     );
   }
 
-  Widget _modeBtn(String value, String label, IconData icon) {
-    final selected = _paymentMode == value;
-    return SizedBox(
-      width: double.infinity,
-      child: OutlinedButton(
-        onPressed: () => setState(() {
-          _paymentMode = value;
-          if (value != 'split') {
-            _cashCtrl.clear();
-            _upiCtrl.clear();
-          }
-        }),
-        style: OutlinedButton.styleFrom(
-          backgroundColor: selected ? FlowColors.accent : Colors.white,
-          side: BorderSide(
-              color: selected ? FlowColors.primary : Colors.black26,
-              width: selected ? 2.5 : 1.5),
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 18, color: FlowColors.primary),
-            const SizedBox(width: 8),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 16,
-                    fontWeight:
-                        selected ? FontWeight.bold : FontWeight.normal,
-                    color: FlowColors.primary)),
-          ],
-        ),
-      ),
-    );
-  }
-
   // ─── Step 5: Summary & Confirmation ─────────────────────────────────────────
+
+  String _bankLabel() {
+    if (_selectedBankAccountId == null) return 'Bank';
+    final name = _bankAccounts
+        .cast<BankAccount?>()
+        .firstWhere((a) => a?.id == _selectedBankAccountId, orElse: () => null)
+        ?.name;
+    return name != null ? 'Bank ($name)' : 'Bank';
+  }
 
   Widget _buildStep5() {
     if (widget.editMode) return _buildEditStep5();
@@ -844,14 +799,14 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     final displayDate = formatDmy(widget.contextDate ?? now);
     final cashAmt = _paymentMode == 'cash'
         ? _loanAmount
-        : _paymentMode == 'upi'
+        : _paymentMode == 'bank'
             ? 0.0
             : double.tryParse(_cashCtrl.text.replaceAll(',', '')) ?? 0;
-    final upiAmt = _paymentMode == 'upi'
+    final bankAmt = _paymentMode == 'bank'
         ? _loanAmount
         : _paymentMode == 'cash'
             ? 0.0
-            : double.tryParse(_upiCtrl.text.replaceAll(',', '')) ?? 0;
+            : double.tryParse(_bankCtrl.text.replaceAll(',', '')) ?? 0;
     final customer = _capturedCustomer;
     final itemData = _capturedItems;
 
@@ -924,11 +879,12 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                       children: [
                         if (i > 0)
                           const Divider(height: 16, thickness: 0.8),
-                        Text('Item ${i + 1}: ${it.itemType}',
+                        Text('Item List ${i + 1}',
                             style: const TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w600)),
-                        _summaryRow('  Quantity', '${it.quantity}'),
+                        _summaryRow('  Item Types', it.itemType),
+                        _summaryRow('  Total Quantity', '${it.quantity}'),
                         _summaryRow('  Gross',
                             '${it.grossWeight.toStringAsFixed(2)} g'),
                         _summaryRow('  Net',
@@ -962,8 +918,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
           onEdit: () => setState(() => _step = 4),
           children: [
             _summaryRow('Mode', _paymentMode.toUpperCase()),
-            if (_paymentMode != 'upi') _summaryRow('Cash', money(cashAmt)),
-            if (_paymentMode != 'cash') _summaryRow('UPI', money(upiAmt)),
+            if (_paymentMode != 'bank') _summaryRow('Cash', money(cashAmt)),
+            if (_paymentMode != 'cash') _summaryRow(_bankLabel(), money(bankAmt)),
             _summaryRow('Total', money(_loanAmount), highlight: true),
           ],
         ),
@@ -1107,10 +1063,11 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (i > 0) const Divider(height: 16, thickness: 0.8),
-                        Text('Item ${i + 1}: ${it.itemType}',
+                        Text('Item List ${i + 1}',
                             style: const TextStyle(
                                 fontSize: 17, fontWeight: FontWeight.w600)),
-                        _summaryRow('  Quantity', '${it.quantity}'),
+                        _summaryRow('  Item Types', it.itemType),
+                        _summaryRow('  Total Quantity', '${it.quantity}'),
                         _summaryRow('  Gross',
                             '${it.grossWeight.toStringAsFixed(2)} g'),
                         _summaryRow('  Net',
@@ -1144,7 +1101,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
           onEdit: () => setState(() => _step = 4),
           children: [
             _summaryRow('Mode', _paymentMode.toUpperCase()),
-            if (_paymentMode != 'upi')
+            if (_paymentMode != 'bank')
               _summaryRow(
                   'Cash',
                   money(_paymentMode == 'cash'
@@ -1154,11 +1111,11 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                           0))),
             if (_paymentMode != 'cash')
               _summaryRow(
-                  'UPI',
-                  money(_paymentMode == 'upi'
+                  _bankLabel(),
+                  money(_paymentMode == 'bank'
                       ? _loanAmount
                       : (double.tryParse(
-                              _upiCtrl.text.replaceAll(',', '')) ??
+                              _bankCtrl.text.replaceAll(',', '')) ??
                           0))),
             _summaryRow('Total', money(_loanAmount), highlight: true),
           ],
@@ -1203,23 +1160,23 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     }
 
     // Compute exact split from user's Step 4 selection.
-    final cashAmt = _paymentMode == 'upi'
+    final cashAmt = _paymentMode == 'bank'
         ? 0.0
         : _paymentMode == 'cash'
             ? _loanAmount
             : double.tryParse(
                     _cashCtrl.text.replaceAll(',', '').trim()) ??
                 0.0;
-    final upiAmt = _paymentMode == 'cash'
+    final bankAmt = _paymentMode == 'cash'
         ? 0.0
-        : _paymentMode == 'upi'
+        : _paymentMode == 'bank'
             ? _loanAmount
             : double.tryParse(
-                    _upiCtrl.text.replaceAll(',', '').trim()) ??
+                    _bankCtrl.text.replaceAll(',', '').trim()) ??
                 0.0;
-    if ((cashAmt + upiAmt - _loanAmount).abs() > 0.5) {
+    if ((cashAmt + bankAmt - _loanAmount).abs() > 0.5) {
       _showError(
-          'Cash + UPI must equal the loan amount (${money(_loanAmount)}). '
+          'Cash + Bank must equal the loan amount (${money(_loanAmount)}). '
           'Please go back to Step 4 and correct the payment split.');
       return;
     }
@@ -1300,7 +1257,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         customerId: customerId ?? existingPledge.customerId,
         customerSnapshot: customerSnapshot,
         goldPhotoPaths: goldPhotoPaths.isEmpty ? null : goldPhotoPaths,
-        formPhotoPaths: existingPledge.formPhotoPaths,
+        formPhotoPaths: _existingFormPhotoPaths.isNotEmpty ? _existingFormPhotoPaths : null,
         grossWeight: _grossWeight,
         netWeight: _netWeight,
         goldRate: _goldRate,
@@ -1322,7 +1279,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         'principal_amount': existingPledge.loanAmount,
         'pledge_rate': existingPledge.pledgeRate,
         'customer_id': existingPledge.customerId,
-        'gold_photo_paths': existingPledge.goldPhotoPaths,
+        'gold_photo_paths': null,
       });
       final newJson = jsonEncode({
         'gross_weight': _grossWeight,
@@ -1338,13 +1295,14 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         updatedPledge: updatedPledge,
         updatedItems: pledgeItems,
         newGoldPhotoPaths: goldPhotoPaths,
-        newFormPhotoPaths: existingPledge.formPhotoPaths ?? [],
+        newFormPhotoPaths: _existingFormPhotoPaths,
         originalPrincipal: existingPledge.loanAmount,
         editReason: widget.editReason ?? '',
         oldValueJson: oldJson,
         newValueJson: newJson,
         newCashAmount: cashAmt,
-        newUpiAmount: upiAmt,
+        newBankAmount: bankAmt,
+        newBankAccountId: _selectedBankAccountId,
       );
 
       if (mounted) {

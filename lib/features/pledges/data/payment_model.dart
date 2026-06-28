@@ -1,7 +1,6 @@
-/// A single entry in the accounts ledger (`payments` table — formerly the
-/// `transactions` table). Every cash/UPI movement in the business is one row:
-/// loan disbursements, closures, renewal interest, part payments, loan
-/// increases, expenses and balance adjustments.
+/// A single entry in the accounts ledger (`payments` table). Every cash/bank
+/// movement in the business is one row: loan disbursements, closures, renewal
+/// interest, part payments, loan increases, expenses and balance adjustments.
 class PaymentModel {
   const PaymentModel({
     this.id,
@@ -11,7 +10,8 @@ class PaymentModel {
     required this.direction,
     this.amount = 0.0,
     this.cashAmount = 0.0,
-    this.upiAmount = 0.0,
+    this.bankAmount = 0.0,
+    this.bankAccountId,
     this.pledgeId,
     this.notes,
     this.createdBy,
@@ -25,7 +25,8 @@ class PaymentModel {
   final String direction; // DB: direction ('in' / 'out')
   final double amount;
   final double cashAmount; // DB: cash_amount
-  final double upiAmount; // DB: upi_amount
+  final double bankAmount; // DB: bank_amount (formerly upi_amount)
+  final int? bankAccountId; // DB: bank_account_id (null when bank_amount = 0)
   final int? pledgeId; // DB: pledge_id (null for EXPENSE / ADJUSTMENT)
   final String? notes;
   final int? createdBy; // DB: created_by
@@ -40,7 +41,8 @@ class PaymentModel {
       direction: map['direction'] as String? ?? 'in',
       amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
       cashAmount: (map['cash_amount'] as num?)?.toDouble() ?? 0.0,
-      upiAmount: (map['upi_amount'] as num?)?.toDouble() ?? 0.0,
+      bankAmount: (map['bank_amount'] as num?)?.toDouble() ?? 0.0,
+      bankAccountId: map['bank_account_id'] as int?,
       pledgeId: map['pledge_id'] as int?,
       notes: map['notes'] as String?,
       createdBy: map['created_by'] as int?,
@@ -57,7 +59,8 @@ class PaymentModel {
       'direction': direction,
       'amount': amount,
       'cash_amount': cashAmount,
-      'upi_amount': upiAmount,
+      'bank_amount': bankAmount,
+      'bank_account_id': bankAccountId,
       'pledge_id': pledgeId,
       'notes': notes,
       'created_by': createdBy,
@@ -100,9 +103,15 @@ class PaymentSubCategory {
   static const interestNotCapitalised = 'INTEREST_NOT_CAPITALISED';
   static const interestCapitalised = 'INTEREST_CAPITALISED';
 
-  // Adjustments
+  // Adjustments (legacy UPI variants kept for backward compat with existing rows)
   static const addCash = 'ADD_CASH';
   static const addUpi = 'ADD_UPI';
   static const cashToUpi = 'CASH_TO_UPI';
   static const upiToCash = 'UPI_TO_CASH';
+
+  // Adjustments (multi-account bank variants)
+  static const addBank    = 'ADD_BANK';
+  static const cashToBank = 'CASH_TO_BANK';
+  static const bankToCash = 'BANK_TO_CASH';
+  static const bankToBank = 'BANK_TO_BANK';
 }

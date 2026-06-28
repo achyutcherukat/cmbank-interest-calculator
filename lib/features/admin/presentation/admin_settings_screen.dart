@@ -13,6 +13,7 @@ import '../../backup/presentation/backup_actions.dart';
 import '../data/admin_repository.dart';
 import '../data/audit_log_repository.dart';
 import 'initial_setup_values_screen.dart';
+import 'manage_bank_accounts_screen.dart';
 import '../data/item_types_repository.dart';
 import '../data/purity_types_repository.dart';
 
@@ -243,6 +244,7 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                 _mastersTile('Item Types', _itemTypes, true),
                 _mastersTile('Purity Types', _purityTypes, false),
                 _expenseCategoriesTile(),
+                _manageBankAccountsTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Backup', Icons.backup),
                 _backupCard(),
@@ -803,6 +805,29 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _manageBankAccountsTile() {
+    return FlowCard(
+      padding: const EdgeInsets.all(0),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        leading: const Icon(Icons.account_balance,
+            color: FlowColors.primary, size: 26),
+        title: const Text('Bank Accounts',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        subtitle: const Text('Manage payment bank accounts',
+            style: TextStyle(fontSize: 14, color: FlowColors.medText)),
+        trailing: const Icon(Icons.chevron_right),
+        minVerticalPadding: 16,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => const ManageBankAccountsScreen()),
+        ),
       ),
     );
   }

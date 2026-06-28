@@ -1,6 +1,7 @@
 import '../../../core/database/app_database.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../pledges/data/payments_repository.dart';
+import 'daily_account_balance_repository.dart';
 
 /// Live cash/UPI movement totals for a day, computed from the `payments` table.
 class DayTotals {
@@ -162,9 +163,9 @@ class DailyBalanceRepository {
 
     final results = await Future.wait([
       _payments.getTotalCashInForDate(date),
-      _payments.getTotalUpiInForDate(date),
+      _payments.getTotalBankInForDate(date),
       _payments.getTotalCashOutForDate(date),
-      _payments.getTotalUpiOutForDate(date),
+      _payments.getTotalBankOutForDate(date),
     ]);
 
     return DayTotals(
@@ -178,7 +179,7 @@ class DailyBalanceRepository {
   }
 
   /// Calculates final totals from the payments ledger, stores them, and locks
-  /// the day.
+  /// the day. Also freezes per-account daily_account_balance rows.
   Future<DayTotals> lockDay(String date, int? userId) async {
     final record = await getOrCreateForDate(date);
     final totals = await calculateTotalsForDate(date,
@@ -203,6 +204,13 @@ class DailyBalanceRepository {
       where: 'business_date = ?',
       whereArgs: [date],
     );
+
+    // Freeze per-account balances alongside the combined total.
+    if (record.id != null) {
+      await DailyAccountBalanceRepository.instance
+          .lockAllForDate(date, record.id!);
+    }
+
     return totals;
   }
 

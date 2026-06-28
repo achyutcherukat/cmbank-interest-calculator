@@ -47,21 +47,33 @@ class ItemDetailsData {
   final List<File> photos;
 }
 
-// ─── Mutable entry (internal) ─────────────────────────────────────────────────
+// ─── Internal data model ──────────────────────────────────────────────────────
+
+class _TypeQtyPair {
+  String type;
+  int qty;
+  _TypeQtyPair({required this.type, this.qty = 1});
+}
 
 class _ItemEntry {
   final grossCtrl = TextEditingController();
   final netCtrl = TextEditingController();
   final notesCtrl = TextEditingController();
   final purityCtrl = TextEditingController();
-  final qtyCtrl = TextEditingController(text: '1');
-  String itemType = 'Other';
+  List<_TypeQtyPair> typeQtyPairs = [];
 
   double get grossWeight => double.tryParse(grossCtrl.text) ?? 0;
   double get netWeight => double.tryParse(netCtrl.text) ?? 0;
-  int get quantity {
-    final n = int.tryParse(qtyCtrl.text.trim()) ?? 1;
-    return n < 1 ? 1 : n;
+
+  int get totalQuantity {
+    final s = typeQtyPairs.fold(0, (acc, p) => acc + p.qty);
+    return s < 1 ? 1 : s;
+  }
+
+  /// Auto-generated comma-separated description, e.g. "Chain - 2, Bangle - 2".
+  String get itemType {
+    if (typeQtyPairs.isEmpty) return 'Other';
+    return typeQtyPairs.map((p) => '${p.type} - ${p.qty}').join(', ');
   }
 
   void dispose() {
@@ -69,7 +81,6 @@ class _ItemEntry {
     netCtrl.dispose();
     notesCtrl.dispose();
     purityCtrl.dispose();
-    qtyCtrl.dispose();
   }
 }
 
@@ -82,12 +93,14 @@ class SharedItemDetailsStep extends StatefulWidget {
     required this.netWeight,
     this.initialData,
     this.pledgeNumber = '',
+    this.prefillOtherItem = false,
   });
 
   final double grossWeight;
   final double netWeight;
   final ItemDetailsData? initialData;
   final String pledgeNumber;
+  final bool prefillOtherItem;
 
   @override
   State<SharedItemDetailsStep> createState() => SharedItemDetailsStepState();
@@ -116,6 +129,36 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
     }
   }
 
+  /// Parses an existing item_type string back into type+qty pairs.
+  /// Handles both the new format ("Chain - 2, Bangle - 2") and old single-type
+  /// format ("Necklace") from records created before this rework.
+  static List<_TypeQtyPair> _parseItemType(String itemType, int fallbackQty) {
+    if (itemType.isEmpty || itemType == 'Other') return [];
+    final parts = itemType
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final result = <_TypeQtyPair>[];
+    for (final part in parts) {
+      final dashIdx = part.lastIndexOf(' - ');
+      if (dashIdx > 0) {
+        final typePart = part.substring(0, dashIdx).trim();
+        final qtyStr = part.substring(dashIdx + 3).trim();
+        final qty = int.tryParse(qtyStr);
+        if (qty != null && qty > 0 && typePart.isNotEmpty) {
+          result.add(_TypeQtyPair(type: typePart, qty: qty));
+          continue;
+        }
+      }
+      // Old format or unparseable: treat whole string as single type name.
+      final effectiveQty =
+          parts.length == 1 ? (fallbackQty < 1 ? 1 : fallbackQty) : 1;
+      result.add(_TypeQtyPair(type: part, qty: effectiveQty));
+    }
+    return result;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -129,19 +172,21 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
         entry.netCtrl.text = e.netWeight > 0 ? e.netWeight.toString() : '';
         entry.notesCtrl.text = e.notes ?? '';
         entry.purityCtrl.text = e.purity ?? '';
-        entry.qtyCtrl.text = '${e.quantity < 1 ? 1 : e.quantity}';
-        entry.itemType = e.itemType;
+        entry.typeQtyPairs = _parseItemType(e.itemType, e.quantity);
         return entry;
       }).toList();
       _itemPhotos = List.from(d.photos);
     } else {
       _items = [_ItemEntry()];
-      // Pre-fill first item with totals from Step 1
+      // Pre-fill first item with totals from Step 1.
       if (widget.grossWeight > 0) {
         _items[0].grossCtrl.text = widget.grossWeight.toString();
       }
       if (widget.netWeight > 0) {
         _items[0].netCtrl.text = widget.netWeight.toString();
+      }
+      if (widget.prefillOtherItem) {
+        _items[0].typeQtyPairs = [_TypeQtyPair(type: 'Other', qty: 1)];
       }
     }
   }
@@ -154,6 +199,26 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
     super.dispose();
   }
 
+  /// Returns a validation error message, or null if all Item Lists are valid.
+  String? validate() {
+    for (int i = 0; i < _items.length; i++) {
+      final e = _items[i];
+      if (e.typeQtyPairs.isEmpty) {
+        return 'Item List ${i + 1}: Add at least one item type before proceeding.';
+      }
+      if (e.grossWeight <= 0) {
+        return 'Item List ${i + 1}: Enter a valid gross weight.';
+      }
+      if (e.netWeight <= 0) {
+        return 'Item List ${i + 1}: Enter a valid net weight.';
+      }
+      if (e.netWeight > e.grossWeight) {
+        return 'Item List ${i + 1}: Net weight cannot exceed gross weight.';
+      }
+    }
+    return null;
+  }
+
   ItemDetailsData getData() {
     return ItemDetailsData(
       items: _items
@@ -162,7 +227,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                 itemType: e.itemType,
                 grossWeight: e.grossWeight,
                 netWeight: e.netWeight,
-                quantity: e.quantity,
+                quantity: e.typeQtyPairs.isEmpty ? 1 : e.totalQuantity,
                 notes: e.notesCtrl.text.trim().isEmpty
                     ? null
                     : e.notesCtrl.text.trim(),
@@ -173,6 +238,84 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
           .toList(),
       photos: List.unmodifiable(_itemPhotos),
     );
+  }
+
+  Future<void> _showAddItemTypeDialog(int itemIndex) async {
+    String selectedType = 'Other';
+    int selectedQty = 1;
+
+    final result = await showDialog<_TypeQtyPair?>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setStateDialog) => AlertDialog(
+          title: const Text('Add Item Type',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              InputDecorator(
+                decoration: const InputDecoration(
+                    labelText: 'Item Type', isDense: true),
+                child: DropdownButton<String>(
+                  value: selectedType,
+                  isExpanded: true,
+                  underline: const SizedBox(),
+                  items: _itemTypes
+                      .map((t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 16))))
+                      .toList(),
+                  onChanged: (v) =>
+                      setStateDialog(() => selectedType = v ?? selectedType),
+                ),
+              ),
+              const SizedBox(height: 14),
+              InputDecorator(
+                decoration: const InputDecoration(
+                    labelText: 'Quantity', isDense: true),
+                child: DropdownButton<int>(
+                  value: selectedQty,
+                  isExpanded: true,
+                  underline: const SizedBox(),
+                  items: List.generate(9, (i) => i + 1)
+                      .map((n) => DropdownMenuItem(
+                          value: n,
+                          child: Text('$n',
+                              style: const TextStyle(fontSize: 16))))
+                      .toList(),
+                  onChanged: (v) =>
+                      setStateDialog(() => selectedQty = v ?? selectedQty),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('CANCEL',
+                  style: TextStyle(
+                      color: Colors.black54, fontWeight: FontWeight.w600)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx)
+                  .pop(_TypeQtyPair(type: selectedType, qty: selectedQty)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: FlowColors.primary,
+                foregroundColor: FlowColors.textOnNavyLarge,
+              ),
+              child: const Text('ADD'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      setState(() => _items[itemIndex].typeQtyPairs.add(result));
+    }
   }
 
   Future<void> _pickPhoto(ImageSource source) async {
@@ -254,7 +397,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             ),
           ),
 
-        const _ItemSecHeader('Items'),
+        const _ItemSecHeader('Item Lists'),
         ...List.generate(_items.length, _buildItemRow),
         Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 8),
@@ -262,7 +405,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             onPressed: () => setState(() => _items.add(_ItemEntry())),
             icon: const Icon(Icons.add_circle,
                 color: FlowColors.primary, size: 20),
-            label: const Text('ADD ANOTHER ITEM',
+            label: const Text('ADD ANOTHER ITEM LIST',
                 style: TextStyle(
                     fontSize: 15,
                     color: FlowColors.primary,
@@ -313,9 +456,10 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Card header
           Row(
             children: [
-              Text('Item ${index + 1}',
+              Text('Item List ${index + 1}',
                   style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -333,37 +477,74 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             ],
           ),
           const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 3,
-                child: DropdownButtonFormField<String>(
-                  initialValue: _itemTypes.contains(entry.itemType)
-                      ? entry.itemType
-                      : null,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                      labelText: 'Item Type', isDense: true),
-                  items: _typeItems(entry.itemType)
-                      .map((t) => DropdownMenuItem(
-                          value: t,
-                          child: Text(t,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 16))))
-                      .toList(),
-                  onChanged: (v) =>
-                      setState(() => entry.itemType = v ?? 'Other'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 1,
-                child: _quantityDropdown(entry),
-              ),
-            ],
+
+          // Item type + quantity chips sub-section
+          const Text('ITEM TYPES',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: FlowColors.medText,
+                  letterSpacing: 0.6)),
+          const SizedBox(height: 8),
+
+          if (entry.typeQtyPairs.isNotEmpty) ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: List.generate(entry.typeQtyPairs.length, (ci) {
+                final pair = entry.typeQtyPairs[ci];
+                return Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: FlowColors.accent,
+                    borderRadius: BorderRadius.circular(20),
+                    border:
+                        Border.all(color: FlowColors.primaryLight, width: 1.2),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('${pair.qty} × ${pair.type}',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: FlowColors.primary)),
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: () =>
+                            setState(() => entry.typeQtyPairs.removeAt(ci)),
+                        child: const Icon(Icons.close,
+                            size: 15, color: FlowColors.primary),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 8),
+          ],
+
+          TextButton.icon(
+            onPressed: () => _showAddItemTypeDialog(index),
+            icon: const Icon(Icons.add, color: FlowColors.primary, size: 18),
+            label: const Text('ADD ITEM TYPE',
+                style: TextStyle(
+                    fontSize: 14,
+                    color: FlowColors.primary,
+                    fontWeight: FontWeight.w600)),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
           ),
-          const SizedBox(height: 10),
+
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFEEEEEE)),
+          const SizedBox(height: 12),
+
+          // Shared weight fields for this Item List
           Row(
             children: [
               Expanded(child: _decimalField('Gross (g)', entry.grossCtrl)),
@@ -371,7 +552,8 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
               Expanded(child: _decimalField('Net (g)', entry.netCtrl)),
             ],
           ),
-          const SizedBox(height: 6),
+
+          // Shared purity for this Item List
           DropdownButtonFormField<String>(
             initialValue: _purityValue(entry.purityCtrl.text),
             isExpanded: true,
@@ -386,6 +568,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                 setState(() => entry.purityCtrl.text = v ?? ''),
           ),
           const SizedBox(height: 6),
+
           TextField(
             controller: entry.notesCtrl,
             style: const TextStyle(fontSize: 16),
@@ -393,24 +576,34 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                 labelText: 'Notes (optional)', isDense: true),
           ),
           const SizedBox(height: 8),
-          Text(
-            'Qty: ${entry.quantity}   •   Net: ${entry.netWeight.toStringAsFixed(2)} g'
-            '${entry.purityCtrl.text.trim().isEmpty ? '' : '   •   ${entry.purityCtrl.text.trim()}'}',
-            style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: FlowColors.medText),
-          ),
+
+          // Live summary line
+          if (_buildItemSummary(entry).isNotEmpty)
+            Text(
+              _buildItemSummary(entry),
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: FlowColors.medText),
+            ),
         ],
       ),
     );
   }
 
-  // Ensure the current value is always present in the dropdown items so a
-  // value loaded from an older record never crashes the DropdownButtonFormField.
-  List<String> _typeItems(String current) {
-    if (current.isEmpty || _itemTypes.contains(current)) return _itemTypes;
-    return [current, ..._itemTypes];
+  String _buildItemSummary(_ItemEntry entry) {
+    final parts = <String>[];
+    if (entry.typeQtyPairs.isNotEmpty) {
+      final total = entry.totalQuantity;
+      parts.add('$total item${total == 1 ? '' : 's'} total');
+    }
+    if (entry.netWeight > 0) {
+      parts.add('Net: ${entry.netWeight.toStringAsFixed(2)} g');
+    }
+    if (entry.purityCtrl.text.trim().isNotEmpty) {
+      parts.add(entry.purityCtrl.text.trim());
+    }
+    return parts.join('   •   ');
   }
 
   String? _purityValue(String current) =>
@@ -434,22 +627,6 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
         onChanged: (_) => setState(() {}),
         decoration: InputDecoration(labelText: label, isDense: true),
       ),
-    );
-  }
-
-  Widget _quantityDropdown(_ItemEntry entry) {
-    final q = entry.quantity;
-    final current = q < 1 ? 1 : (q > 9 ? 9 : q);
-    return DropdownButtonFormField<int>(
-      initialValue: current,
-      isExpanded: true,
-      decoration: const InputDecoration(labelText: 'Qty', isDense: true),
-      items: List.generate(9, (i) => i + 1)
-          .map((n) => DropdownMenuItem(
-              value: n,
-              child: Text('$n', style: const TextStyle(fontSize: 16))))
-          .toList(),
-      onChanged: (v) => setState(() => entry.qtyCtrl.text = '${v ?? 1}'),
     );
   }
 

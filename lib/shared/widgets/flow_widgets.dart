@@ -36,6 +36,7 @@ class FlowCard extends StatelessWidget {
     this.backgroundColor = Colors.white,
     this.borderColor = FlowColors.primaryLight,
     this.padding = const EdgeInsets.all(18),
+    this.onTap,
   });
 
   final Widget child;
@@ -43,15 +44,14 @@ class FlowCard extends StatelessWidget {
   final Color backgroundColor;
   final Color borderColor;
   final EdgeInsetsGeometry padding;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 14),
-      padding: header != null ? EdgeInsets.zero : padding,
       decoration: BoxDecoration(
-        color: backgroundColor,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: borderColor, width: 1.5),
         boxShadow: const [
@@ -62,36 +62,52 @@ class FlowCard extends StatelessWidget {
           ),
         ],
       ),
-      child: header != null
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 10, horizontal: 16),
-                  decoration: const BoxDecoration(
-                    color: CMBColors.navy,
-                    borderRadius:
-                        BorderRadius.vertical(top: Radius.circular(12)),
-                    border: Border(
-                        bottom: BorderSide(
-                            color: CMBColors.borderOnNavy, width: 0.8)),
-                  ),
-                  child: Text(
-                    header!.toUpperCase(),
-                    style: const TextStyle(
-                      color: CMBColors.textOnNavyLarge,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.0,
-                    ),
-                  ),
-                ),
-                Padding(padding: padding, child: child),
-              ],
-            )
-          : child,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12.5),
+        child: Material(
+          color: backgroundColor,
+          child: InkWell(
+            onTap: onTap,
+            child: header != null
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 10, horizontal: 16),
+                        decoration: const BoxDecoration(
+                          color: CMBColors.navy,
+                          border: Border(
+                              bottom: BorderSide(
+                                  color: CMBColors.borderOnNavy, width: 0.8)),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                header!.toUpperCase(),
+                                style: const TextStyle(
+                                  color: CMBColors.textOnNavyLarge,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ),
+                            if (onTap != null)
+                              const Icon(Icons.chevron_right,
+                                  color: CMBColors.textOnNavyMuted, size: 16),
+                          ],
+                        ),
+                      ),
+                      Padding(padding: padding, child: child),
+                    ],
+                  )
+                : Padding(padding: padding, child: child),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -236,16 +252,18 @@ class DetailRow extends StatelessWidget {
     required this.value,
     this.isLast = false,
     this.valueColor = FlowColors.primary,
+    this.onTap,
   });
 
   final String label;
   final String value;
   final bool isLast;
   final Color valueColor;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final row = Container(
       padding: EdgeInsets.only(bottom: isLast ? 0 : 10),
       margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
       decoration: BoxDecoration(
@@ -264,19 +282,41 @@ class DetailRow extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: valueColor,
-              ),
-            ),
+            child: onTap != null
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          value,
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: valueColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.phone_outlined,
+                          size: 15, color: FlowColors.primary),
+                    ],
+                  )
+                : Text(
+                    value,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: valueColor,
+                    ),
+                  ),
           ),
         ],
       ),
     );
+    if (onTap == null) return row;
+    return InkWell(onTap: onTap, child: row);
   }
 }
 

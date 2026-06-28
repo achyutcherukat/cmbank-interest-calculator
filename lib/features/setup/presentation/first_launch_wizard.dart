@@ -7,6 +7,7 @@ import '../../../core/services/encryption_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../app/theme.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../accounts/data/bank_account_repository.dart';
 import '../../gold_stock/data/gold_rates_repository.dart';
 
 class FirstLaunchWizard extends StatefulWidget {
@@ -125,6 +126,20 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
       final pledgeRate =
           double.tryParse(_pledgeRateController.text.trim()) ?? 0;
       await GoldRatesRepository.instance.saveRates(pledgeRate: pledgeRate);
+
+      // Create the default bank account (initial type — no ADD_BANK payment).
+      final openingUpi = double.tryParse(
+              _openingUpiController.text.trim().replaceAll(',', '')) ?? 0.0;
+      final startDate = _appStartDate.toIso8601String().substring(0, 10);
+      final upiAccount = await BankAccountRepository.instance.insert(
+        name: 'UPI',
+        openingBalance: openingUpi,
+        startDate: startDate,
+        createOpeningPayment: false,
+      );
+      if (upiAccount.id != null) {
+        await BankAccountRepository.instance.setDefault(upiAccount.id!);
+      }
 
       await db.update(
         'users',

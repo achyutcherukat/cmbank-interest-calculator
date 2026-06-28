@@ -92,7 +92,8 @@ class PledgeRepository {
     PledgeModel pledge,
     List<PledgeItemModel> items, {
     double cashAmount = 0,
-    double upiAmount = 0,
+    double bankAmount = 0,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) async {
@@ -118,8 +119,9 @@ class PledgeRepository {
         pledgeId,
         pledge.loanAmount,
         cashAmount,
-        upiAmount,
+        bankAmount,
         paymentDate,
+        bankAccountId: bankAccountId,
         notes: 'Loan for pledge #${pledge.pledgeNumber}',
         createdBy: createdBy,
         txn: txn,
@@ -361,6 +363,23 @@ class PledgeRepository {
       await txn.insert('pledge_items', copy);
     }
 
+    // Register photos for the new pledge by copying the old pledge's
+    // photo_sync_log entries. Photos are shared physical files; new entries
+    // start unsynced so the backup flow uploads them to the new pledge folder.
+    final oldPhotos = await txn.query(
+      'photo_sync_log',
+      where: 'pledge_id = ?',
+      whereArgs: [old.id],
+    );
+    for (final row in oldPhotos) {
+      await PhotoSyncRepository.instance.insertPhoto(
+        pledgeId: newPledgeId,
+        photoType: row['photo_type'] as String,
+        localPath: row['local_path'] as String,
+        txn: txn,
+      );
+    }
+
     await _advanceNewPledgeCounter(txn, newPledgeNo, now);
     return newPledgeId;
   }
@@ -374,7 +393,8 @@ class PledgeRepository {
     required double totalInterestPaid,
     required double totalAmountCollected,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) async {
@@ -403,8 +423,9 @@ class PledgeRepository {
         pledgeId,
         totalAmountCollected,
         cashAmount,
-        upiAmount,
+        bankAmount,
         paymentDate,
+        bankAccountId: bankAccountId,
         notes: 'Closure of pledge',
         createdBy: createdBy,
         txn: txn,
@@ -437,7 +458,8 @@ class PledgeRepository {
     required double total,
     required double interestRate,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
   }) async {
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toIso8601String();
@@ -473,8 +495,9 @@ class PledgeRepository {
         pledgeId,
         total,
         cashAmount,
-        upiAmount,
+        bankAmount,
         today,
+        bankAccountId: bankAccountId,
         notes: 'Manual closure of pledge #$pledgeNumber',
         txn: txn,
       );
@@ -565,7 +588,8 @@ class PledgeRepository {
     required double newPrincipal,
     required double interest,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) {
@@ -580,8 +604,8 @@ class PledgeRepository {
       contextDate: contextDate,
       onPayment: (txn, oldId, newId, today) =>
           _payments.createRenewalInterestPaid(
-              oldId, interest, cashAmount, upiAmount, today,
-              createdBy: createdBy, txn: txn),
+              oldId, interest, cashAmount, bankAmount, today,
+              bankAccountId: bankAccountId, createdBy: createdBy, txn: txn),
     );
   }
 
@@ -612,7 +636,8 @@ class PledgeRepository {
     required double interest,
     required double totalPaid,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) {
@@ -626,9 +651,9 @@ class PledgeRepository {
       createdBy: createdBy,
       contextDate: contextDate,
       onPayment: (txn, oldId, newId, today) => _payments.createPartPayment(
-          oldId, totalPaid, cashAmount, upiAmount,
+          oldId, totalPaid, cashAmount, bankAmount,
           PaymentSubCategory.principalAndInterest, today,
-          createdBy: createdBy, txn: txn),
+          bankAccountId: bankAccountId, createdBy: createdBy, txn: txn),
     );
   }
 
@@ -639,7 +664,8 @@ class PledgeRepository {
     required double interest,
     required double fixedAmount,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) {
@@ -653,9 +679,9 @@ class PledgeRepository {
       createdBy: createdBy,
       contextDate: contextDate,
       onPayment: (txn, oldId, newId, today) => _payments.createPartPayment(
-          oldId, fixedAmount, cashAmount, upiAmount,
+          oldId, fixedAmount, cashAmount, bankAmount,
           PaymentSubCategory.fixedAmountInclusive, today,
-          createdBy: createdBy, txn: txn),
+          bankAccountId: bankAccountId, createdBy: createdBy, txn: txn),
     );
   }
 
@@ -667,7 +693,8 @@ class PledgeRepository {
     required double interest,
     required double extraCashOut,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) {
@@ -683,9 +710,9 @@ class PledgeRepository {
       onPayment: extraCashOut > 0
           ? (txn, oldId, newId, today) =>
               _payments.createLoanIncreaseDisbursed(
-                  newId, extraCashOut, cashAmount, upiAmount,
+                  newId, extraCashOut, cashAmount, bankAmount,
                   PaymentSubCategory.interestNotCapitalised, today,
-                  createdBy: createdBy, txn: txn)
+                  bankAccountId: bankAccountId, createdBy: createdBy, txn: txn)
           : null,
     );
   }
@@ -697,7 +724,8 @@ class PledgeRepository {
     required double interest,
     required double extraCashOut,
     required double cashAmount,
-    required double upiAmount,
+    required double bankAmount,
+    int? bankAccountId,
     int? createdBy,
     String? contextDate,
   }) {
@@ -713,9 +741,9 @@ class PledgeRepository {
       onPayment: extraCashOut > 0
           ? (txn, oldId, newId, today) =>
               _payments.createLoanIncreaseDisbursed(
-                  newId, extraCashOut, cashAmount, upiAmount,
+                  newId, extraCashOut, cashAmount, bankAmount,
                   PaymentSubCategory.interestCapitalised, today,
-                  createdBy: createdBy, txn: txn)
+                  bankAccountId: bankAccountId, createdBy: createdBy, txn: txn)
           : null,
     );
   }
@@ -741,7 +769,8 @@ class PledgeRepository {
     // these exact values. When null (migrated-loan edit path), the split is
     // adjusted proportionally if the principal changed.
     double? newCashAmount,
-    double? newUpiAmount,
+    double? newBankAmount,
+    int? newBankAccountId,
     // Set to false for migrated-pledge edits: their dates are before
     // app_use_start_date so no daily_stock rows exist for them and the
     // cascade is always a no-op anyway.
@@ -752,7 +781,7 @@ class PledgeRepository {
     final pledgeDate = updatedPledge.pledgeDate;
     final principalChanged =
         (updatedPledge.loanAmount - originalPrincipal).abs() > 0.01;
-    final hasExplicitSplit = newCashAmount != null && newUpiAmount != null;
+    final hasExplicitSplit = newCashAmount != null && newBankAmount != null;
 
     await db.transaction((txn) async {
       // 1. UPDATE pledges row
@@ -826,7 +855,7 @@ class PledgeRepository {
           final double finalCash, finalUpi, finalAmt;
           if (hasExplicitSplit) {
             finalCash = newCashAmount;
-            finalUpi = newUpiAmount;
+            finalUpi = newBankAmount;
             finalAmt = finalCash + finalUpi;
           } else {
             // Proportional rescaling for migrated-loan edit path.
@@ -835,7 +864,7 @@ class PledgeRepository {
             final oldCash =
                 (payRows.first['cash_amount'] as num?)?.toDouble() ?? oldAmt;
             final oldUpi =
-                (payRows.first['upi_amount'] as num?)?.toDouble() ?? 0.0;
+                (payRows.first['bank_amount'] as num?)?.toDouble() ?? 0.0;
             final newAmt = updatedPledge.loanAmount;
             double scaledCash, scaledUpi;
             if (oldAmt > 0) {
@@ -852,16 +881,16 @@ class PledgeRepository {
             finalUpi = scaledUpi;
             finalAmt = newAmt;
           }
-          await txn.update(
-            'payments',
-            {
-              'amount': finalAmt,
-              'cash_amount': finalCash,
-              'upi_amount': finalUpi,
-            },
-            where: 'id = ?',
-            whereArgs: [payRows.first['id']],
-          );
+          final payUpdate = <String, Object?>{
+            'amount': finalAmt,
+            'cash_amount': finalCash,
+            'bank_amount': finalUpi,
+          };
+          if (hasExplicitSplit && newBankAccountId != null) {
+            payUpdate['bank_account_id'] = newBankAccountId;
+          }
+          await txn.update('payments', payUpdate,
+              where: 'id = ?', whereArgs: [payRows.first['id']]);
         }
       }
 

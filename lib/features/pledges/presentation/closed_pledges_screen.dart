@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,9 +5,12 @@ import 'package:flutter/services.dart';
 
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/restorable_photo_thumb.dart';
+import '../../accounts/data/bank_account_model.dart';
+import '../../accounts/data/bank_account_repository.dart';
 import '../data/payment_model.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
+import '../../../core/services/photo_sync_repository.dart';
 import '../data/pledge_repository.dart';
 import 'open_pledge_screen.dart';
 
@@ -260,9 +262,12 @@ class _ClosedPledgeDetailScreenState
   PledgeModel? _pledge;
   List<PledgeItemModel> _items = [];
   List<PaymentModel> _payments = [];
+  List<BankAccount> _allAccounts = [];
   Map<String, dynamic>? _customer;
   List<_ClChainEntry> _chain = [];
   bool _loading = true;
+  List<String> _goldPhotoPaths = [];
+  List<String> _idProofPhotoPaths = [];
 
   @override
   void initState() {
@@ -290,17 +295,36 @@ class _ClosedPledgeDetailScreenState
     }
 
     final chain = await _buildChain(pledge);
+    final allAccounts = await BankAccountRepository.instance.getAll();
+
+    final goldPhotos = await PhotoSyncRepository.instance
+        .getByPledge(pledge.id!, PhotoType.gold);
+    final idProofPhotos = pledge.customerId != null
+        ? await PhotoSyncRepository.instance.getByCustomer(pledge.customerId!)
+        : <PhotoSyncEntry>[];
 
     if (mounted) {
       setState(() {
         _pledge = pledge;
         _items = items;
         _payments = payments;
+        _allAccounts = allAccounts;
         _customer = customer;
         _chain = chain;
+        _goldPhotoPaths = goldPhotos.map((e) => e.localPath).toList();
+        _idProofPhotoPaths = idProofPhotos.map((e) => e.localPath).toList();
         _loading = false;
       });
     }
+  }
+
+  String _bankLabel(int? id) {
+    if (id == null) return 'Bank';
+    final name = _allAccounts
+        .cast<BankAccount?>()
+        .firstWhere((a) => a?.id == id, orElse: () => null)
+        ?.name;
+    return name != null ? 'Bank ($name)' : 'Bank';
   }
 
   Future<List<_ClChainEntry>> _buildChain(PledgeModel p) async {
@@ -327,16 +351,6 @@ class _ClosedPledgeDetailScreenState
     return chain;
   }
 
-  List<String> _parsePhotoPaths(dynamic value) {
-    if (value == null) return [];
-    final s = value as String?;
-    if (s == null || s.isEmpty) return [];
-    try {
-      return (jsonDecode(s) as List).cast<String>();
-    } catch (_) {
-      return [];
-    }
-  }
 
   String _statusLabel(String? renewType) {
     switch (renewType) {
@@ -381,8 +395,8 @@ class _ClosedPledgeDetailScreenState
   }
 
   String _paymentModeLabel(PaymentModel p) {
-    if (p.cashAmount > 0 && p.upiAmount > 0) return 'SPLIT';
-    if (p.upiAmount > 0) return 'UPI';
+    if (p.cashAmount > 0 && p.bankAmount > 0) return 'SPLIT';
+    if (p.bankAmount > 0) return 'BANK';
     return 'CASH';
   }
 
@@ -594,8 +608,7 @@ class _ClosedPledgeDetailScreenState
                   // ID proof photos
                   if (_customer != null) ...[
                     Builder(builder: (_) {
-                      final paths = _parsePhotoPaths(
-                          _customer!['id_proof_photo_paths']);
+                      final paths = _idProofPhotoPaths;
                       if (paths.isEmpty) return const SizedBox.shrink();
                       return Padding(
                         padding: const EdgeInsets.only(top: 10),
@@ -641,15 +654,18 @@ class _ClosedPledgeDetailScreenState
               FlowCard(
                 header: _items.length == 1
                     ? 'Item Details'
-                    : 'Item ${i + 1} of ${_items.length}',
+                    : 'Item List ${i + 1} of ${_items.length}',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (_items[i].itemType.isNotEmpty &&
                         _items[i].itemType != 'Other')
                       DetailRow(
-                          label: 'Type',
+                          label: 'Item Types',
                           value: _items[i].itemType),
+                    DetailRow(
+                        label: 'Total Quantity',
+                        value: '${_items[i].quantity}'),
                     if (_items[i].grossWeight > 0)
                       DetailRow(
                           label: 'Gross Weight',
@@ -674,14 +690,14 @@ class _ClosedPledgeDetailScreenState
                 ),
               ),
 
-          // ── Gold Photos (now stored at pledge level) ───────────────────────
-          if ((p.goldPhotoPaths ?? []).isNotEmpty)
+          // ── Gold Photos ────────────────────────────────────────────────────
+          if (_goldPhotoPaths.isNotEmpty)
             FlowCard(
               header: 'Gold Photos',
               child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: p.goldPhotoPaths!
+                children: _goldPhotoPaths
                     .map((ph) => RestorablePhotoThumb(
                           localPath: ph,
                           width: 100,
@@ -725,10 +741,10 @@ class _ClosedPledgeDetailScreenState
                       DetailRow(
                           label: 'Cash',
                           value: money(_payments[i].cashAmount)),
-                    if (_payments[i].upiAmount > 0)
+                    if (_payments[i].bankAmount > 0)
                       DetailRow(
-                          label: 'UPI',
-                          value: money(_payments[i].upiAmount)),
+                          label: _bankLabel(_payments[i].bankAccountId),
+                          value: money(_payments[i].bankAmount)),
                     DetailRow(
                         label: 'Mode',
                         value: _paymentModeLabel(_payments[i]),

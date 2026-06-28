@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../data/admin_repository.dart';
 import '../data/audit_log_repository.dart';
+import 'table_browser_screen.dart';
 
 class AuditLogViewerScreen extends StatefulWidget {
   const AuditLogViewerScreen({super.key});
@@ -168,36 +169,62 @@ class _AuditLogViewerScreenState extends State<AuditLogViewerScreen>
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
-          children: _filters.map((f) {
-            final active = _category == f.$1;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: GestureDetector(
-                onTap: () => _selectCategory(f.$1),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: active ? FlowColors.primary : FlowColors.bg,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                        color: active
-                            ? FlowColors.primary
-                            : FlowColors.primaryLight),
-                  ),
-                  child: Text(
-                    f.$2,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: active ? Colors.white : FlowColors.primary,
+          children: [
+            ..._filters.map((f) {
+              final active = _category == f.$1;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: GestureDetector(
+                  onTap: () => _selectCategory(f.$1),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: active ? FlowColors.primary : FlowColors.bg,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                          color: active
+                              ? FlowColors.primary
+                              : FlowColors.primaryLight),
+                    ),
+                    child: Text(
+                      f.$2,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: active ? Colors.white : FlowColors.primary,
+                      ),
                     ),
                   ),
                 ),
+              );
+            }),
+            GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const TableBrowserScreen()),
               ),
-            );
-          }).toList(),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(
+                  color: FlowColors.bg,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: FlowColors.primaryLight),
+                ),
+                child: const Text(
+                  'Tables',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.primary,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

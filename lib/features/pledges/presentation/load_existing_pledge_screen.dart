@@ -15,6 +15,7 @@ import '../../../shared/widgets/shared_item_details_step.dart';
 import '../../customers/data/customer_repository.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
+import '../../../core/services/photo_sync_repository.dart';
 import '../data/pledge_repository.dart';
 import 'open_pledge_screen.dart';
 
@@ -181,7 +182,7 @@ class _LoadExistingPledgeScreenState
     if (mounted) setState(() => _appStartDate = date);
   }
 
-  void _prefillForEdit() {
+  Future<void> _prefillForEdit() async {
     final p = widget.existingPledge;
     if (p == null) return;
 
@@ -192,17 +193,23 @@ class _LoadExistingPledgeScreenState
     _grossWeightCtrl.text = p.grossWeight.toStringAsFixed(2);
     _netWeightCtrl.text = p.netWeight.toStringAsFixed(2);
 
-    // Pre-fill form photos from stored paths
-    _formPhotos = (p.formPhotoPaths ?? []).map((ph) => File(ph)).toList();
+    // Pre-fill form photos from photo_sync_log
+    final formEntries = p.id != null
+        ? await PhotoSyncRepository.instance
+            .getByPledge(p.id!, PhotoType.document)
+        : <PhotoSyncEntry>[];
+    _formPhotos = formEntries.map((e) => File(e.localPath)).toList();
 
     // Pre-fill customer
     final row = widget.existingCustomerRow;
     if (row != null) {
+      final customerId = row['id'] as int?;
       List<File> idPhotos = [];
-      try {
-        final paths = jsonDecode(row['id_proof_photo_paths'] as String? ?? '[]') as List;
-        idPhotos = paths.map((e) => File(e as String)).toList();
-      } catch (_) {}
+      if (customerId != null) {
+        final syncEntries =
+            await PhotoSyncRepository.instance.getByCustomer(customerId);
+        idPhotos = syncEntries.map((e) => File(e.localPath)).toList();
+      }
       _capturedCustomer = CustomerDetailsData(
         phone: (row['phone'] as String?) ?? '',
         name: (row['name'] as String?) ?? '',
@@ -210,16 +217,20 @@ class _LoadExistingPledgeScreenState
         idProofType: (row['id_proof_type'] as String?) ?? 'None',
         idNumber: (row['id_proof_number'] as String?) ?? '',
         idProofPhotos: idPhotos,
-        existingCustomerId: row['id'] as int?,
+        existingCustomerId: customerId,
         pinCode: row['pin_code'] as String?,
         district: row['district'] as String?,
         state: row['state'] as String?,
       );
     }
 
-    // Pre-fill items + gold photos
+    // Pre-fill items + gold photos from photo_sync_log
+    final goldEntries = p.id != null
+        ? await PhotoSyncRepository.instance.getByPledge(p.id!, PhotoType.gold)
+        : <PhotoSyncEntry>[];
+    final goldPhotos = goldEntries.map((e) => File(e.localPath)).toList();
+
     final items = widget.existingItems ?? [];
-    final goldPhotos = (p.goldPhotoPaths ?? []).map((ph) => File(ph)).toList();
     _capturedItems = ItemDetailsData(
       items: items
           .map((it) => ItemEntryData(
@@ -235,7 +246,7 @@ class _LoadExistingPledgeScreenState
     );
 
     // Start on step 5
-    _step = 5;
+    if (mounted) setState(() => _step = 5);
   }
 
   @override
@@ -261,7 +272,9 @@ class _LoadExistingPledgeScreenState
         Navigator.pop(context);
       }
     } else {
-      if (_step > 1) {
+      if (_step == 5) {
+        setState(() => _step = 3);
+      } else if (_step > 1) {
         setState(() => _step--);
       } else {
         Navigator.pop(context);
@@ -845,14 +858,20 @@ class _LoadExistingPledgeScreenState
           netWeight: _netWeight,
           initialData: _capturedItems,
           pledgeNumber: _pledgeNoCtrl.text.trim(),
+          prefillOtherItem: true,
         ),
         const SizedBox(height: 20),
         _skipProceedRow(
           () {
             _capturedItems = _itemsKey.currentState?.getData();
-            setState(() => _step = 4);
+            setState(() => _step = 5);
           },
           () {
+            final validationError = _itemsKey.currentState?.validate();
+            if (validationError != null) {
+              _showError(validationError);
+              return;
+            }
             final data = _itemsKey.currentState?.getData();
             if (data != null && data.items.isNotEmpty) {
               final totalGross =
@@ -873,7 +892,7 @@ class _LoadExistingPledgeScreenState
               }
             }
             _capturedItems = data;
-            setState(() => _step = 4);
+            setState(() => _step = 5);
           },
         ),
       ],
@@ -1104,11 +1123,12 @@ class _LoadExistingPledgeScreenState
                       children: [
                         if (i > 0)
                           const Divider(height: 16, thickness: 0.8),
-                        Text('Item ${i + 1}: ${it.itemType}',
+                        Text('Item List ${i + 1}',
                             style: const TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w600)),
-                        _summaryRow('  Quantity', '${it.quantity}'),
+                        _summaryRow('  Item Types', it.itemType),
+                        _summaryRow('  Total Quantity', '${it.quantity}'),
                         _summaryRow('  Gross',
                             '${it.grossWeight.toStringAsFixed(2)} g'),
                         _summaryRow('  Net',
@@ -1139,6 +1159,7 @@ class _LoadExistingPledgeScreenState
         _summarySection(
           title: 'FORM SCAN',
           onEdit: () => setState(() => _step = 4),
+          editLabel: _formPhotos.isEmpty ? 'ADD FORMS' : 'EDIT',
           children: _formPhotos.isNotEmpty
               ? [
                   Text('${_formPhotos.length} page(s) scanned.',
@@ -1266,11 +1287,12 @@ class _LoadExistingPledgeScreenState
                       children: [
                         if (i > 0)
                           const Divider(height: 16, thickness: 0.8),
-                        Text('Item ${i + 1}: ${it.itemType}',
+                        Text('Item List ${i + 1}',
                             style: const TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w600)),
-                        _summaryRow('  Quantity', '${it.quantity}'),
+                        _summaryRow('  Item Types', it.itemType),
+                        _summaryRow('  Total Quantity', '${it.quantity}'),
                         _summaryRow('  Gross',
                             '${it.grossWeight.toStringAsFixed(2)} g'),
                         _summaryRow('  Net',
@@ -1302,6 +1324,7 @@ class _LoadExistingPledgeScreenState
         _summarySection(
           title: 'FORM SCAN',
           onEdit: () => setState(() => _step = 4),
+          editLabel: _formPhotos.isEmpty ? 'ADD FORMS' : 'EDIT',
           children: _formPhotos.isNotEmpty
               ? [
                   Text('${_formPhotos.length} page(s) scanned.',
@@ -1463,8 +1486,6 @@ class _LoadExistingPledgeScreenState
         'net_weight': existingPledge.netWeight,
         'principal_amount': existingPledge.loanAmount,
         'customer_id': existingPledge.customerId,
-        'form_photo_paths': existingPledge.formPhotoPaths,
-        'gold_photo_paths': existingPledge.goldPhotoPaths,
       });
       final newJson = jsonEncode({
         'pledge_no': _pledgeNoCtrl.text.trim(),
@@ -1597,6 +1618,7 @@ class _LoadExistingPledgeScreenState
     required VoidCallback onEdit,
     required List<Widget> children,
     bool hideEditButton = false,
+    String editLabel = 'EDIT',
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -1632,13 +1654,13 @@ class _LoadExistingPledgeScreenState
                 if (!hideEditButton)
                   GestureDetector(
                     onTap: onEdit,
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.edit_note,
+                        const Icon(Icons.edit_note,
                             size: 16, color: FlowColors.textOnNavyLarge),
-                        SizedBox(width: 4),
-                        Text('EDIT',
-                            style: TextStyle(
+                        const SizedBox(width: 4),
+                        Text(editLabel,
+                            style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
                                 color: FlowColors.textOnNavyLarge)),

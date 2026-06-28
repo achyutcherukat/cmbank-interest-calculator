@@ -1,14 +1,5 @@
 import 'dart:convert';
 
-List<String>? _parseJsonList(String? json) {
-  if (json == null || json.isEmpty) return null;
-  try {
-    return (jsonDecode(json) as List).cast<String>();
-  } catch (_) {
-    return null;
-  }
-}
-
 Map<String, dynamic>? _parseJsonMap(String? json) {
   if (json == null || json.isEmpty) return null;
   try {
@@ -112,8 +103,6 @@ class PledgeModel {
       source: map['source'] as String? ?? 'new',
       renewalParentId: map['renewal_parent_id'] as int?,
       notes: map['notes'] as String?,
-      goldPhotoPaths: _parseJsonList(map['gold_photo_paths'] as String?),
-      formPhotoPaths: _parseJsonList(map['form_photo_paths'] as String?),
       createdAt: map['created_at'] as String? ?? '',
       customerId: map['customer_id'] as int?,
       customerSnapshot: _parseJsonMap(map['customer_snapshot'] as String?),
@@ -147,10 +136,6 @@ class PledgeModel {
       'pledge_rate': pledgeRate,
       'gold_rate': goldRate,
       'actual_item_value': actualItemValue,
-      'gold_photo_paths':
-          goldPhotoPaths != null ? jsonEncode(goldPhotoPaths!) : null,
-      'form_photo_paths':
-          formPhotoPaths != null ? jsonEncode(formPhotoPaths!) : null,
       'customer_id': customerId,
       'customer_snapshot':
           customerSnapshot != null ? jsonEncode(customerSnapshot!) : null,

@@ -16,8 +16,12 @@ import '../../pledges/presentation/closed_pledges_screen.dart';
 import '../../pledges/presentation/load_existing_pledge_screen.dart';
 import '../../pledges/presentation/new_pledge_screen.dart';
 import '../../pledges/presentation/open_pledge_screen.dart';
+import '../../../shared/widgets/shared_split_payment_widget.dart';
+import '../data/bank_account_repository.dart';
+import 'adjust_balance_screen.dart';
 import '../data/daily_balance_repository.dart';
 import '../data/day_reconciliation_repository.dart';
+import 'daily_bank_breakdown_screen.dart';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
@@ -46,6 +50,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
 
   List<Map<String, dynamic>> _inTxns = [];
   List<Map<String, dynamic>> _outTxns = [];
+  Map<int, String> _bankAccountNames = {};
 
   // Computed totals. Each row carries split cash/upi amounts; adjustments are
   // ordinary payment rows (direction in/out) and fold in here automatically.
@@ -133,6 +138,11 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
       pledgeCache[id] = await PledgeRepository.instance.getPledgeById(id);
     }
 
+    final allAccounts = await BankAccountRepository.instance.getAll();
+    _bankAccountNames = {
+      for (final a in allAccounts) if (a.id != null) a.id!: a.name,
+    };
+
     final inMapped = inPayments
         .map((p) =>
             _mapPayment(p, p.pledgeId == null ? null : pledgeCache[p.pledgeId]))
@@ -178,7 +188,10 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
       'id': p.id,
       'amount': p.amount,
       'cash': p.cashAmount,
-      'upi': p.upiAmount,
+      'upi': p.bankAmount,
+      'bank_account_name': p.bankAccountId != null
+          ? _bankAccountNames[p.bankAccountId]
+          : null,
       'payment_type': p.paymentType,
       'sub_category': p.subCategory,
       'direction': p.direction,
@@ -240,7 +253,16 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                 child: SizedBox(
                                   height: 54,
                                   child: ElevatedButton.icon(
-                                    onPressed: _showAdjustBalance,
+                                    onPressed: () async {
+                                      await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => AdjustBalanceScreen(
+                                              date: _selectedDate),
+                                        ),
+                                      );
+                                      _loadData();
+                                    },
                                     icon: const Icon(Icons.tune, size: 18),
                                     label: const Text('ADJUST BALANCE',
                                         style: TextStyle(
@@ -474,7 +496,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
               const SizedBox(width: 16),
               Expanded(
                   child: _miniBalance(
-                      'UPI', _openingUpi, Icons.qr_code_scanner)),
+                      'Bank', _openingUpi, Icons.account_balance)),
             ],
           ),
         ],
@@ -573,7 +595,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
             const SizedBox(height: 6),
             _modeRow('Cash', cash, color),
             const SizedBox(height: 2),
-            _modeRow('UPI', upi, color),
+            _modeRow('Bank', upi, color),
           ],
         ),
       ),
@@ -581,60 +603,67 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
   }
 
   Widget _buildClosingCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: FlowColors.primary,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x1A000000), blurRadius: 8, offset: Offset(0, 2))
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('CLOSING BALANCE',
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: FlowColors.textOnNavyMuted,
-                  letterSpacing: 1.0)),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                  child: _closingItem('CASH', _closingCash, Icons.payments)),
-              Container(
-                  width: 1,
-                  height: 50,
-                  color: FlowColors.borderOnNavy,
-                  margin: const EdgeInsets.symmetric(horizontal: 12)),
-              Expanded(
-                  child: _closingItem(
-                      'UPI', _closingUpi, Icons.qr_code_scanner)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Divider(color: FlowColors.borderOnNavy, height: 1),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('TOTAL',
-                  style: TextStyle(
-                      fontSize: 14,
-                      color: FlowColors.textOnNavySmall,
-                      fontWeight: FontWeight.w600)),
-              Text(money(_closingCash + _closingUpi),
-                  style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: FlowColors.textOnNavyLarge)),
-            ],
-          ),
-        ],
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => DailyBankBreakdownScreen(date: _selectedDate)),
+      ).then((_) => _loadData()),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: FlowColors.primary,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x1A000000), blurRadius: 8, offset: Offset(0, 2))
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('CLOSING BALANCE',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: FlowColors.textOnNavyMuted,
+                    letterSpacing: 1.0)),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                    child: _closingItem('CASH', _closingCash, Icons.payments)),
+                Container(
+                    width: 1,
+                    height: 50,
+                    color: FlowColors.borderOnNavy,
+                    margin: const EdgeInsets.symmetric(horizontal: 12)),
+                Expanded(
+                    child: _closingItem(
+                        'Bank', _closingUpi, Icons.account_balance)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Divider(color: FlowColors.borderOnNavy, height: 1),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('TOTAL',
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: FlowColors.textOnNavySmall,
+                        fontWeight: FontWeight.w600)),
+                Text(money(_closingCash + _closingUpi),
+                    style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: FlowColors.textOnNavyLarge)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -727,36 +756,6 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
     );
   }
 
-  Widget _modeChip(
-      String label, IconData icon, bool selected, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? FlowColors.accent : Colors.white,
-          border: Border.all(
-              color: selected ? FlowColors.primary : Colors.black26,
-              width: selected ? 2 : 1),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 16, color: FlowColors.primary),
-            const SizedBox(width: 6),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight:
-                        selected ? FontWeight.bold : FontWeight.normal,
-                    color: FlowColors.primary)),
-          ],
-        ),
-      ),
-    );
-  }
-
   // ─── Add Expense ──────────────────────────────────────────────────────────
 
   Future<void> _showAddExpense() async {
@@ -768,13 +767,15 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
       orderBy: 'name ASC',
     );
     final cats = rows.map((r) => r['name'] as String).toList();
+    final accounts = await BankAccountRepository.instance.getActive();
 
     if (!mounted) return;
 
+    final payKey = GlobalKey<SharedSplitPaymentWidgetState>();
     final amountCtrl = TextEditingController();
     final notesCtrl = TextEditingController();
     String? selectedCat;
-    String mode = 'cash';
+    double expTotal = 0;
     String? error;
     bool saving = false;
 
@@ -824,8 +825,13 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                       prefixText: '₹ ',
                       border: OutlineInputBorder(),
                     ),
-                    onChanged: (_) {
-                      if (error != null) setBS(() => error = null);
+                    onChanged: (v) {
+                      final parsed =
+                          double.tryParse(v.replaceAll(',', '')) ?? 0;
+                      setBS(() {
+                        expTotal = parsed;
+                        if (error != null) error = null;
+                      });
                     },
                   ),
                   const SizedBox(height: 16),
@@ -841,28 +847,13 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                     onChanged: (v) => setBS(() => selectedCat = v),
                   ),
                   const SizedBox(height: 16),
-                  const Text('Payment Method',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87)),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                          child: _modeChip(
-                              'CASH',
-                              Icons.payments,
-                              mode == 'cash',
-                              () => setBS(() => mode = 'cash'))),
-                      const SizedBox(width: 10),
-                      Expanded(
-                          child: _modeChip(
-                              'UPI',
-                              Icons.qr_code_scanner,
-                              mode == 'upi',
-                              () => setBS(() => mode = 'upi'))),
-                    ],
+                  SharedSplitPaymentWidget(
+                    key: payKey,
+                    total: expTotal,
+                    totalLabel: 'Expense Amount',
+                    bankAccounts: accounts,
+                    isMoneyIn: false,
+                    showTotalBanner: false,
                   ),
                   const SizedBox(height: 14),
                   TextField(
@@ -909,16 +900,27 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                         error = 'Select a category.');
                                     return;
                                   }
+                                  final payState = payKey.currentState;
+                                  final payErr = payState?.validate();
+                                  if (payErr != null) {
+                                    setBS(() => error = payErr);
+                                    return;
+                                  }
+                                  final cashAmt =
+                                      payState?.cashAmount ?? amt.toDouble();
+                                  final bankAmt = payState?.bankAmount ?? 0;
+                                  final bankAccId = payState?.bankAccountId;
                                   setBS(() => saving = true);
                                   final catLabel = selectedCat!;
                                   final notes = notesCtrl.text.trim();
                                   await PaymentsRepository.instance
                                       .createExpense(
                                     amt.toDouble(),
-                                    mode == 'cash' ? amt.toDouble() : 0,
-                                    mode == 'upi' ? amt.toDouble() : 0,
+                                    cashAmt,
+                                    bankAmt,
                                     catLabel,
                                     _iso(_selectedDate),
+                                    bankAccountId: bankAccId,
                                     notes: notes.isEmpty ? null : notes,
                                   );
                                   await AuditLogRepository.instance.log(
@@ -957,214 +959,6 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
     );
   }
 
-  // ─── Adjust Balance ───────────────────────────────────────────────────────
-
-  void _showAdjustBalance() {
-    String adjustType = 'add_cash';
-    final amountCtrl = TextEditingController();
-    final reasonCtrl = TextEditingController();
-    String? error;
-    bool saving = false;
-
-    const options = <(String, String, IconData)>[
-      ('add_cash', 'Add Cash', Icons.payments),
-      ('add_upi', 'Add UPI', Icons.qr_code_scanner),
-      ('transfer', 'Transfer Cash → UPI', Icons.swap_horiz),
-      ('transfer_upi', 'Transfer UPI → Cash', Icons.swap_horiz),
-    ];
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          title: const Text('Adjust Balance',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: FlowColors.primary)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Adjustment Type',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                ...options.map((t) {
-                  final selected = adjustType == t.$1;
-                  return GestureDetector(
-                    onTap: () => setD(() => adjustType = t.$1),
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: selected ? FlowColors.accent : Colors.white,
-                        border: Border.all(
-                            color: selected
-                                ? FlowColors.primary
-                                : Colors.black26,
-                            width: selected ? 2 : 1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(children: [
-                        Icon(t.$3,
-                            size: 18,
-                            color: selected
-                                ? FlowColors.primary
-                                : Colors.black54),
-                        const SizedBox(width: 10),
-                        Text(t.$2,
-                            style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: selected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: selected
-                                    ? FlowColors.primary
-                                    : Colors.black87)),
-                        const Spacer(),
-                        if (selected)
-                          const Icon(Icons.check_circle,
-                              color: FlowColors.primary, size: 18),
-                      ]),
-                    ),
-                  );
-                }),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: amountCtrl,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [IndianNumberFormatter()],
-                  decoration: const InputDecoration(
-                      labelText: 'Amount (₹) *',
-                      prefixText: '₹ ',
-                      border: OutlineInputBorder()),
-                  onChanged: (_) {
-                    if (error != null) setD(() => error = null);
-                  },
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: reasonCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Reason (mandatory) *',
-                      hintText: 'Why is this adjustment needed?',
-                      border: OutlineInputBorder()),
-                  maxLines: 2,
-                  onChanged: (_) {
-                    if (error != null) setD(() => error = null);
-                  },
-                ),
-                if (error != null) ...[
-                  const SizedBox(height: 8),
-                  Text(error!,
-                      style: const TextStyle(
-                          color: Colors.red, fontSize: 14)),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.pop(ctx),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Colors.grey, fontSize: 16)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: FlowColors.primaryLight,
-                  foregroundColor: Colors.white),
-              onPressed: saving
-                  ? null
-                  : () async {
-                      final amt =
-                          int.tryParse(amountCtrl.text.replaceAll(',', '').trim());
-                      if (amt == null || amt <= 0) {
-                        setD(() => error = 'Enter a valid amount.');
-                        return;
-                      }
-                      if (reasonCtrl.text.trim().isEmpty) {
-                        setD(() => error = 'Reason is required.');
-                        return;
-                      }
-                      setD(() => saving = true);
-
-                      final dateStr = _iso(_selectedDate);
-                      final reason = reasonCtrl.text.trim();
-                      final amount = amt.toDouble();
-                      final payments = PaymentsRepository.instance;
-
-                      if (adjustType == 'add_cash') {
-                        await payments.createAdjustment(
-                            amount, amount, 0,
-                            PaymentSubCategory.addCash,
-                            PaymentDirection.inward, dateStr,
-                            notes: reason);
-                      } else if (adjustType == 'add_upi') {
-                        await payments.createAdjustment(
-                            amount, 0, amount,
-                            PaymentSubCategory.addUpi,
-                            PaymentDirection.inward, dateStr,
-                            notes: reason);
-                      } else if (adjustType == 'transfer') {
-                        // CASH_TO_UPI: cash out + upi in
-                        await payments.createAdjustment(
-                            amount, amount, 0,
-                            PaymentSubCategory.cashToUpi,
-                            PaymentDirection.outward, dateStr,
-                            notes: reason);
-                        await payments.createAdjustment(
-                            amount, 0, amount,
-                            PaymentSubCategory.cashToUpi,
-                            PaymentDirection.inward, dateStr,
-                            notes: reason);
-                      } else {
-                        // UPI_TO_CASH: upi out + cash in
-                        await payments.createAdjustment(
-                            amount, 0, amount,
-                            PaymentSubCategory.upiToCash,
-                            PaymentDirection.outward, dateStr,
-                            notes: reason);
-                        await payments.createAdjustment(
-                            amount, amount, 0,
-                            PaymentSubCategory.upiToCash,
-                            PaymentDirection.inward, dateStr,
-                            notes: reason);
-                      }
-
-                      await AuditLogRepository.instance.log(
-                        actionCategory: AuditCategory.dayManagement,
-                        action: 'BALANCE_ADJUSTED',
-                        entityType: 'payments',
-                        entityId: dateStr,
-                        newValueJson:
-                            '{"type":"$adjustType","amount":$amt}',
-                        reason: reason,
-                      );
-
-                      if (!ctx.mounted) return;
-                      Navigator.pop(ctx);
-                      _loadData();
-                    },
-              child: saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : const Text('APPLY',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   // ─── Reconcile & Lock ─────────────────────────────────────────────────────
 
@@ -1637,7 +1431,7 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
       return widget.txns
           .where((t) => (t['cash'] as num).toDouble() > 0)
           .toList();
-    } else if (_filter == 'upi') {
+    } else if (_filter == 'bank') {
       return widget.txns
           .where((t) => (t['upi'] as num).toDouble() > 0)
           .toList();
@@ -1734,7 +1528,7 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
           const SizedBox(width: 8),
           _filterChip('cash', 'CASH', money(cashTotal)),
           const SizedBox(width: 8),
-          _filterChip('upi', 'UPI', money(upiTotal)),
+          _filterChip('bank', 'BANK', money(upiTotal)),
         ],
       ),
     );
@@ -1744,8 +1538,8 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
     final selected = _filter == value;
     final icon = value == 'cash'
         ? Icons.payments
-        : value == 'upi'
-            ? Icons.smartphone
+        : value == 'bank'
+            ? Icons.account_balance
             : Icons.format_list_bulleted;
     return Expanded(
       child: GestureDetector(
@@ -1810,16 +1604,15 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
             : 'Part Payment — Principal & Interest';
       case 'ADJUSTMENT':
         switch (subCat) {
-          case 'ADD_CASH':
-            return 'Cash Added';
-          case 'ADD_UPI':
-            return 'UPI Added';
-          case 'UPI_TO_CASH':
-            return 'Transfer: UPI to Cash';
-          case 'CASH_TO_UPI':
-            return 'Transfer: Cash to UPI';
-          default:
-            return 'Adjustment';
+          case 'ADD_CASH':     return 'Cash Added';
+          case 'ADD_BANK':     return 'Added Money to Bank Account';
+          case 'ADD_UPI':      return 'UPI Added';
+          case 'CASH_TO_BANK': return 'Transfer : Cash to Bank';
+          case 'BANK_TO_CASH': return 'Transfer : Bank to Cash';
+          case 'BANK_TO_BANK': return 'Transfer : Bank to Bank';
+          case 'CASH_TO_UPI':  return 'Transfer : Cash to UPI';
+          case 'UPI_TO_CASH':  return 'Transfer : UPI to Cash';
+          default:             return 'Adjustment';
         }
       default:
         return payType;
@@ -1835,7 +1628,12 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
     final cash = (t['cash'] as num).toDouble();
     final upi = (t['upi'] as num).toDouble();
     final total = (t['amount'] as num).toDouble();
+    final bankName = t['bank_account_name'] as String?;
+    final bankLabel = bankName != null ? 'Bank ($bankName)' : 'Bank';
     final customer = (t['customer_name'] as String?) ?? '';
+    final notes = (t['notes'] as String?) ?? '';
+    final isAdjustment = payType == 'ADJUSTMENT';
+    final isSplit = cash > 0 && upi > 0;
     final tappable = pledgeId != null && pledgeNo.isNotEmpty;
 
     return GestureDetector(
@@ -1876,12 +1674,23 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
                 Text(customer,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              if (typeLabel.isNotEmpty)
+              if (!isAdjustment && typeLabel.isNotEmpty)
                 Text(typeLabel,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              if (cash > 0 || upi > 0)
-                Text('Cash: ${money(cash)}   UPI: ${money(upi)}',
+              if (isAdjustment && notes.isNotEmpty)
+                Text(notes,
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.black54)),
+              if (isSplit)
+                Text('Cash: ${money(cash)}   $bankLabel: ${money(upi)}',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.black45))
+              else if (cash > 0)
+                const Text('Cash',
+                    style: TextStyle(fontSize: 12, color: Colors.black45))
+              else if (upi > 0)
+                Text(bankLabel,
                     style: const TextStyle(
                         fontSize: 12, color: Colors.black45)),
             ],
@@ -1917,7 +1726,7 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
       return widget.txns
           .where((t) => (t['cash'] as num).toDouble() > 0)
           .toList();
-    } else if (_filter == 'upi') {
+    } else if (_filter == 'bank') {
       return widget.txns
           .where((t) => (t['upi'] as num).toDouble() > 0)
           .toList();
@@ -2011,7 +1820,7 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
           const SizedBox(width: 8),
           _filterChip('cash', 'CASH', money(cashTotal)),
           const SizedBox(width: 8),
-          _filterChip('upi', 'UPI', money(upiTotal)),
+          _filterChip('bank', 'BANK', money(upiTotal)),
         ],
       ),
     );
@@ -2021,8 +1830,8 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
     final selected = _filter == value;
     final icon = value == 'cash'
         ? Icons.payments
-        : value == 'upi'
-            ? Icons.smartphone
+        : value == 'bank'
+            ? Icons.account_balance
             : Icons.format_list_bulleted;
     return Expanded(
       child: GestureDetector(
@@ -2096,11 +1905,19 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
             ? 'Loan Top-Up — Interest Added'
             : 'Loan Top-Up — Interest Paid';
       case 'EXPENSE':
-        return subCat.isNotEmpty ? 'Expense: $subCat' : 'Expense';
+        return subCat.isNotEmpty ? subCat : 'Expense';
       case 'ADJUSTMENT':
-        return subCat == 'UPI_TO_CASH'
-            ? 'Transfer: UPI to Cash'
-            : 'Transfer: Cash to UPI';
+        switch (subCat) {
+          case 'ADD_CASH':     return 'Cash Added';
+          case 'ADD_BANK':     return 'Added Money to Bank Account';
+          case 'ADD_UPI':      return 'UPI Added';
+          case 'CASH_TO_BANK': return 'Transfer : Cash to Bank';
+          case 'BANK_TO_CASH': return 'Transfer : Bank to Cash';
+          case 'BANK_TO_BANK': return 'Transfer : Bank to Bank';
+          case 'CASH_TO_UPI':  return 'Transfer : Cash to UPI';
+          case 'UPI_TO_CASH':  return 'Transfer : UPI to Cash';
+          default:             return 'Adjustment';
+        }
       default:
         return payType;
     }
@@ -2117,7 +1934,13 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
     final cash = (t['cash'] as num).toDouble();
     final upi = (t['upi'] as num).toDouble();
     final amount = (t['amount'] as num).toDouble();
+    final bankName = t['bank_account_name'] as String?;
+    final bankLabel = bankName != null ? 'Bank ($bankName)' : 'Bank';
     final customer = (t['customer_name'] as String?) ?? '';
+    final notes = (t['notes'] as String?) ?? '';
+    final isAdjustment = payType == 'ADJUSTMENT';
+    final isExpense = payType == 'EXPENSE';
+    final isSplit = cash > 0 && upi > 0;
     final tappable = isLoan && pledgeId != null && pledgeNo.isNotEmpty;
 
     return GestureDetector(
@@ -2164,11 +1987,27 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
                 Text(customer,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              Text(label,
-                  style: const TextStyle(
-                      fontSize: 13, color: Colors.black54)),
-              if (cash > 0 || upi > 0)
-                Text('Cash: ${money(cash)}   UPI: ${money(upi)}',
+              if (!isExpense && !isAdjustment)
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.black54)),
+              if (isExpense && notes.isNotEmpty)
+                Text(notes,
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.black54)),
+              if (isAdjustment && notes.isNotEmpty)
+                Text(notes,
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.black54)),
+              if (isSplit)
+                Text('Cash: ${money(cash)}   $bankLabel: ${money(upi)}',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.black45))
+              else if (cash > 0)
+                const Text('Cash',
+                    style: TextStyle(fontSize: 12, color: Colors.black45))
+              else if (upi > 0)
+                Text(bankLabel,
                     style: const TextStyle(
                         fontSize: 12, color: Colors.black45)),
             ],
@@ -2273,7 +2112,7 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
                     label: 'Cash',
                     value: money(widget.expectedCash)),
                 DetailRow(
-                    label: 'UPI',
+                    label: 'Bank',
                     value: money(widget.expectedUpi),
                     isLast: true),
               ],
