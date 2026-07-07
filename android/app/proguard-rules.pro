@@ -6,6 +6,13 @@
 -keep class androidx.work.impl.** { *; }
 -dontwarn androidx.work.**
 
+# Flutter WorkManager plugin background executor. The scheduled Drive backup
+# worker and the Secondary-device 30-minute sync worker (cmb_secondary_sync)
+# both run through BackgroundWorker; keep the plugin classes so the background
+# isolate entry point is not stripped or renamed in release builds.
+-keep class dev.fluttercommunity.workmanager.** { *; }
+-dontwarn dev.fluttercommunity.workmanager.**
+
 # ─── Room (WorkManager bundles its own Room database) ───────────────────────
 -keep class * extends androidx.room.RoomDatabase
 -keep @androidx.room.Entity class *

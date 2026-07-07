@@ -54,7 +54,7 @@ class SharedSplitPaymentWidgetState extends State<SharedSplitPaymentWidget> {
           ? 0
           : (double.tryParse(_bankCtrl.text.replaceAll(',', '')) ?? 0);
 
-  int? get bankAccountId => _selectedBankAccountId;
+  int? get bankAccountId => _mode == 'cash' ? null : _selectedBankAccountId;
 
   BankAccount? get _selectedAccount {
     if (widget.bankAccounts.isEmpty) return null;

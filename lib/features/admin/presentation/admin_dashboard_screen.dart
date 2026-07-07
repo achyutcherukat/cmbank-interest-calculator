@@ -18,11 +18,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with WidgetsBindingObserver {
   AdminOverview? _overview;
   TodayActivity? _today;
+  TodayActivity? _month;
   List<AgeingBucket> _ageing = [];
   GoldAccountSummary? _gold;
   BusinessHealth? _health;
   bool _loading = true;
   DateTime _activityDate = DateTime.now();
+  DateTime _monthDate = DateTime.now();
   DateTime _firstPledgeDate = DateTime(2000);
 
   @override
@@ -59,6 +61,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         AdminRepository.instance.getGoldAccountSummary(),
         AdminRepository.instance.getBusinessHealth(),
         AdminRepository.instance.getFirstPledgeDate(),
+        AdminRepository.instance.getMonthActivity(DateTime.now()),
       ]);
       if (mounted) {
         setState(() {
@@ -68,6 +71,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           _gold = results[3] as GoldAccountSummary;
           _health = results[4] as BusinessHealth;
           _firstPledgeDate = results[5] as DateTime;
+          _month = results[6] as TodayActivity;
           _loading = false;
         });
       }
@@ -82,6 +86,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     if (mounted) setState(() => _today = result);
   }
 
+  Future<void> _loadMonthActivity() async {
+    final result = await AdminRepository.instance.getMonthActivity(_monthDate);
+    if (mounted) setState(() => _month = result);
+  }
+
   Future<void> _pickActivityDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -92,6 +101,120 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     if (picked == null || !mounted) return;
     setState(() => _activityDate = picked);
     _loadActivity();
+  }
+
+  Future<void> _pickMonth() async {
+    final now = DateTime.now();
+    int dialogYear = _monthDate.year;
+
+    final picked = await showDialog<DateTime>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) {
+          final canGoBack = dialogYear > _firstPledgeDate.year;
+          final canGoForward = dialogYear < now.year;
+          const monthNames = [
+            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+          ];
+
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            contentPadding:
+                const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.chevron_left,
+                          color: canGoBack
+                              ? FlowColors.primary
+                              : Colors.black26),
+                      onPressed: canGoBack
+                          ? () => setDialog(() => dialogYear--)
+                          : null,
+                    ),
+                    Text('$dialogYear',
+                        style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.primary)),
+                    IconButton(
+                      icon: Icon(Icons.chevron_right,
+                          color: canGoForward
+                              ? FlowColors.primary
+                              : Colors.black26),
+                      onPressed: canGoForward
+                          ? () => setDialog(() => dialogYear++)
+                          : null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                GridView.count(
+                  crossAxisCount: 3,
+                  shrinkWrap: true,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 2.2,
+                  children: List.generate(12, (i) {
+                    final m = i + 1;
+                    final isSelected = dialogYear == _monthDate.year &&
+                        m == _monthDate.month;
+                    final isBefore = dialogYear < _firstPledgeDate.year ||
+                        (dialogYear == _firstPledgeDate.year &&
+                            m < _firstPledgeDate.month);
+                    final isAfter = dialogYear > now.year ||
+                        (dialogYear == now.year && m > now.month);
+                    final disabled = isBefore || isAfter;
+
+                    return GestureDetector(
+                      onTap: disabled
+                          ? null
+                          : () => Navigator.pop(
+                              ctx, DateTime(dialogYear, m)),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? FlowColors.primary
+                              : disabled
+                                  ? Colors.black12
+                                  : FlowColors.primary
+                                      .withAlpha(20),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          monthNames[i],
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: isSelected
+                                ? FlowColors.goldRich
+                                : disabled
+                                    ? Colors.black38
+                                    : FlowColors.primary,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    if (picked == null || !mounted) return;
+    setState(() => _monthDate = picked);
+    _loadMonthActivity();
   }
 
   Widget _activityDateHeader() {
@@ -171,6 +294,136 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
+  Widget _monthHeader() {
+    final now = DateTime.now();
+    final isCurrentMonth = _monthDate.year == now.year &&
+        _monthDate.month == now.month;
+    final isFirstMonth = _monthDate.year == _firstPledgeDate.year &&
+        _monthDate.month <= _firstPledgeDate.month;
+
+    const monthNames = [
+      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+    ];
+    final label = isCurrentMonth
+        ? "THIS MONTH'S ACTIVITY"
+        : "${monthNames[_monthDate.month - 1]} ${_monthDate.year}  ACTIVITY";
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: FlowColors.primary,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(
+              Icons.chevron_left,
+              color: isFirstMonth ? Colors.transparent : FlowColors.goldRich,
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: isFirstMonth
+                ? null
+                : () {
+                    setState(() => _monthDate =
+                        DateTime(_monthDate.year, _monthDate.month - 1));
+                    _loadMonthActivity();
+                  },
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: _pickMonth,
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                  color: FlowColors.goldRich,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: Icon(
+              Icons.chevron_right,
+              color:
+                  isCurrentMonth ? Colors.transparent : FlowColors.goldRich,
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: isCurrentMonth
+                ? null
+                : () {
+                    setState(() => _monthDate =
+                        DateTime(_monthDate.year, _monthDate.month + 1));
+                    _loadMonthActivity();
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── This Month's Activity ────────────────────────────────────────────────────
+
+  Widget _monthActivitySection() {
+    final t = _month;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _monthHeader(),
+        Row(
+          children: [
+            Expanded(
+              child: _activityTile(
+                icon: Icons.volunteer_activism,
+                label: 'New Loans',
+                count: '${t?.newCount ?? 0}',
+                amount: money(t?.newAmount ?? 0),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _activityTile(
+                icon: Icons.task_alt,
+                label: 'Closed Loans',
+                count: '${t?.closedCount ?? 0}',
+                amount: money(t?.closedAmount ?? 0),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _activityTile(
+                icon: Icons.currency_rupee,
+                label: 'Interest Collected',
+                count: money(t?.interestCollected ?? 0),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _activityTile(
+                icon: Icons.groups,
+                label: 'Customers',
+                count: '${t?.activeCustomers ?? 0}',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -197,6 +450,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 children: [
                   _overviewGrid(),
                   _todayActivitySection(),
+                  _monthActivitySection(),
                   _goldAccountSection(),
                   _ageingSection(),
                   _healthSection(),
@@ -537,11 +791,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           style: TextStyle(
                               fontSize: 15, color: FlowColors.medText)),
                       const SizedBox(height: 4),
-                      Text(money(current),
-                          style: const TextStyle(
-                              fontSize: 30,
-                              fontWeight: FontWeight.bold,
-                              color: FlowColors.primary)),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(money(current),
+                            maxLines: 1,
+                            softWrap: false,
+                            style: const TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.bold,
+                                color: FlowColors.primary)),
+                      ),
                       const SizedBox(height: 4),
                       Text('as of $dateLabel',
                           style: const TextStyle(

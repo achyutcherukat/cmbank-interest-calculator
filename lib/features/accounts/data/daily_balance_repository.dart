@@ -1,4 +1,5 @@
 import '../../../core/database/app_database.dart';
+import '../../../core/services/ledger_posting_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../pledges/data/payments_repository.dart';
 import 'daily_account_balance_repository.dart';
@@ -179,7 +180,10 @@ class DailyBalanceRepository {
   }
 
   /// Calculates final totals from the payments ledger, stores them, and locks
-  /// the day. Also freezes per-account daily_account_balance rows.
+  /// the day. Also freezes per-account daily_account_balance rows and posts
+  /// the day's journal entries — all in one transaction, so a posting failure
+  /// (unbalanced entry, unmapped account) rolls the whole lock back and the
+  /// day stays unlocked. Throws [LedgerPostingException] in that case.
   Future<DayTotals> lockDay(String date, int? userId) async {
     final record = await getOrCreateForDate(date);
     final totals = await calculateTotalsForDate(date,
@@ -187,29 +191,36 @@ class DailyBalanceRepository {
 
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toIso8601String();
-    await db.update(
-      'daily_balance',
-      {
-        'cash_in': totals.cashIn,
-        'upi_in': totals.upiIn,
-        'cash_out': totals.cashOut,
-        'upi_out': totals.upiOut,
-        'closing_cash': totals.closingCash,
-        'closing_upi': totals.closingUpi,
-        'is_locked': 1,
-        'locked_at': now,
-        'locked_by': userId,
-        'updated_at': now,
-      },
-      where: 'business_date = ?',
-      whereArgs: [date],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'daily_balance',
+        {
+          'cash_in': totals.cashIn,
+          'upi_in': totals.upiIn,
+          'cash_out': totals.cashOut,
+          'upi_out': totals.upiOut,
+          'closing_cash': totals.closingCash,
+          'closing_upi': totals.closingUpi,
+          'is_locked': 1,
+          'locked_at': now,
+          'locked_by': userId,
+          'updated_at': now,
+        },
+        where: 'business_date = ?',
+        whereArgs: [date],
+      );
 
-    // Freeze per-account balances alongside the combined total.
-    if (record.id != null) {
-      await DailyAccountBalanceRepository.instance
-          .lockAllForDate(date, record.id!);
-    }
+      // Freeze per-account balances alongside the combined total.
+      if (record.id != null) {
+        await DailyAccountBalanceRepository.instance
+            .lockAllForDate(date, record.id!, txn: txn);
+      }
+
+      // Day End & Close is the ledger's posting moment: generate the day's
+      // journal entries from the final, locked state.
+      await LedgerPostingService.instance
+          .postForDate(date, createdBy: userId, txn: txn);
+    });
 
     return totals;
   }

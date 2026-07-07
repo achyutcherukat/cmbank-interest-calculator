@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,6 +8,9 @@ import '../../../app/theme.dart';
 import '../../../core/services/backup_status_service.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../core/services/photo_backup_service.dart';
+import '../../../core/services/sync_scheduler.dart';
+import '../../../core/settings/app_settings_repository.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../accounts/data/daily_balance_repository.dart';
 import '../../accounts/presentation/daily_accounts_screen.dart';
 import '../../gold_stock/data/gold_rates_repository.dart';
@@ -37,7 +42,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   double  _goldRate   = 0;
@@ -49,10 +54,37 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _lowStorageDismissed = false;
   bool _driveLowDismissed   = false;
 
+  // Secondary-device state. On Primary devices these stay at their defaults and
+  // the Home screen behaves exactly as before.
+  bool    _isSecondary = false;
+  String? _lastSync;
+
+  // Foreground auto-sync (Secondary only). Runs on the main isolate so the DB
+  // swap + reload happen cleanly, unlike the removed background worker.
+  static const Duration _syncInterval = Duration(minutes: 30);
+  Timer? _autoSyncTimer;
+  bool _autoSyncing = false;
+
   @override
   void initState() {
     super.initState();
-    _loadAll();
+    WidgetsBinding.instance.addObserver(this);
+    _loadAll().then((_) {
+      if (mounted) _startAutoSyncIfSecondary();
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoSyncTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // A Secondary device that returns to the foreground checks for fresh data.
+    if (state == AppLifecycleState.resumed) _maybeAutoSync();
   }
 
   Future<void> _loadAll() async {
@@ -60,6 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _loadSettings(),
       _loadTodayAccounts(),
       _loadBackupStatus(),
+      _loadDeviceState(),
     ]);
     if (PhotoBackupService.instance.needsRestore) {
       PhotoBackupService.instance.needsRestore = false;
@@ -112,6 +145,112 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadBackupStatus() async {
     final status = await BackupStatusService.instance.load();
     if (mounted) setState(() => _status = status);
+  }
+
+  Future<void> _loadDeviceState() async {
+    final repo = AppSettingsRepository();
+    final mode = (await repo.getString('device_mode'))?.trim().toLowerCase();
+    final lastSync = await repo.getString('last_sync_from_drive');
+    if (mounted) {
+      setState(() {
+        _isSecondary = mode == 'secondary';
+        _lastSync = lastSync;
+      });
+    }
+  }
+
+  /// Pull-to-refresh handler for Secondary devices. User-initiated, so it runs
+  /// unconditionally (no window/staleness gate). Reuses the shared foreground
+  /// sync; the RefreshIndicator spinner covers progress and local data is
+  /// reloaded afterwards so freshly-synced figures appear at once.
+  Future<void> _syncFromDrive() async {
+    final ok = await runSecondarySync();
+    await _loadAll();
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Sync failed. Check your connection.'),
+        backgroundColor: CMBColors.warningRed,
+        duration: Duration(seconds: 4),
+      ));
+    }
+  }
+
+  // ─── Foreground auto-sync (Secondary only) ─────────────────────────────────
+
+  void _startAutoSyncIfSecondary() {
+    if (!_isSecondary) return;
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = Timer.periodic(_syncInterval, (_) => _maybeAutoSync());
+    // Try once now (gated by window + staleness) so opening the app refreshes.
+    _maybeAutoSync();
+  }
+
+  /// Runs an automatic sync only when this is a Secondary device, no sync is
+  /// already running, the current time is inside the restore window, and the
+  /// last sync is at least [_syncInterval] old.
+  Future<void> _maybeAutoSync() async {
+    if (!_isSecondary || _autoSyncing || !mounted) return;
+    if (!_isSyncStale()) return;
+    if (!await _withinRestoreWindow()) return;
+    if (!mounted) return;
+    await _runForegroundSync();
+  }
+
+  bool _isSyncStale() {
+    final raw = _lastSync;
+    if (raw == null || raw.trim().isEmpty) return true;
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return true;
+    return DateTime.now().difference(dt) >= _syncInterval;
+  }
+
+  /// Restore window mirrors the Primary's backup schedule (inherited via
+  /// restore): GMC 09:00–13:30, CMB 09:00–17:30, etc.
+  Future<bool> _withinRestoreWindow() async {
+    final repo = AppSettingsRepository();
+    final startStr = await repo.getString('backup_start_time') ?? '09:00';
+    final endStr = await repo.getString('backup_end_time') ?? '17:30';
+    final now = DateTime.now();
+    final start = _todayAtHHmm(startStr);
+    final end = _todayAtHHmm(endStr);
+    return !now.isBefore(start) && !now.isAfter(end);
+  }
+
+  DateTime _todayAtHHmm(String hhmm) {
+    final now = DateTime.now();
+    final parts = hhmm.split(':');
+    final h = int.tryParse(parts.isNotEmpty ? parts[0] : '') ?? 9;
+    final m = int.tryParse(parts.length > 1 ? parts[1] : '') ?? 0;
+    return DateTime(now.year, now.month, now.day, h, m);
+  }
+
+  /// Shows a blocking "Syncing…" overlay, runs the sync on the main isolate
+  /// (clean DB swap + reopen), dismisses the overlay, and reloads local data.
+  Future<void> _runForegroundSync() async {
+    _autoSyncing = true;
+    if (mounted) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const _SyncProgressDialog(),
+      );
+    }
+    bool ok = false;
+    try {
+      ok = await runSecondarySync();
+    } finally {
+      // Dismiss the overlay (rootNavigator so it pops the dialog, not a page).
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+    await _loadAll();
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Sync failed. Check your connection.'),
+        backgroundColor: CMBColors.warningRed,
+        duration: Duration(seconds: 4),
+      ));
+    }
+    _autoSyncing = false;
   }
 
   // ─── Rate edit bottom sheet ───────────────────────────────────────────────
@@ -290,7 +429,9 @@ class _HomeScreenState extends State<HomeScreen> {
           // Main scrollable content
           Expanded(
             child: RefreshIndicator(
-              onRefresh: _loadAll,
+              // Secondary devices pull fresh data from Drive; Primary devices
+              // keep the existing local-reload behaviour, unchanged.
+              onRefresh: _isSecondary ? _syncFromDrive : _loadAll,
               color: _gold,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -299,18 +440,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     _ratesCard(),
                     const SizedBox(height: 13),
-                    _actionCard(
-                      iconData: Icons.add_circle_outline,
-                      iconColor: _gold,
-                      iconBg: const Color(0xFFFDF5E0),
-                      borderAccent: _gold,
-                      title: 'New Loan',
-                      subtitle: 'Create a new gold loan',
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const NewPledgeScreen()),
-                      ).then((_) => _loadTodayAccounts()),
+                    RestrictedAction(
+                      child: _actionCard(
+                        iconData: Icons.add_circle_outline,
+                        iconColor: _gold,
+                        iconBg: const Color(0xFFFDF5E0),
+                        borderAccent: _gold,
+                        title: 'New Loan',
+                        subtitle: 'Create a new gold loan',
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const NewPledgeScreen()),
+                        ).then((_) => _loadTodayAccounts()),
+                      ),
                     ),
                     const SizedBox(height: 13),
                     _actionCard(
@@ -343,7 +486,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: 13),
                     _accountsCard(),
                     const SizedBox(height: 13),
-                    _backupBar(),
+                    // Secondary devices sync from Drive (no backups), so the
+                    // backup-status slot becomes a "Last Synced" card instead.
+                    _isSecondary ? _lastSyncedCard() : _backupBar(),
                   ],
                 ),
               ),
@@ -488,12 +633,14 @@ class _HomeScreenState extends State<HomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
-                child: _rateCol(
-                  iconData: Icons.monetization_on,
-                  label: 'Gold rate',
-                  value: _goldRate,
-                  onEdit: () => _showRateSheet(
-                      'Edit Gold Rate', _goldRate, 'gold_rate'),
+                child: RestrictedAction(
+                  child: _rateCol(
+                    iconData: Icons.monetization_on,
+                    label: 'Gold rate',
+                    value: _goldRate,
+                    onEdit: () => _showRateSheet(
+                        'Edit Gold Rate', _goldRate, 'gold_rate'),
+                  ),
                 ),
               ),
               Padding(
@@ -505,12 +652,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               Expanded(
-                child: _rateCol(
-                  iconData: Icons.account_balance,
-                  label: 'Pledge rate',
-                  value: _pledgeRate,
-                  onEdit: () => _showRateSheet('Edit Pledge Rate',
-                      _pledgeRate, 'default_pledge_rate'),
+                child: RestrictedAction(
+                  child: _rateCol(
+                    iconData: Icons.account_balance,
+                    label: 'Pledge rate',
+                    value: _pledgeRate,
+                    onEdit: () => _showRateSheet('Edit Pledge Rate',
+                        _pledgeRate, 'default_pledge_rate'),
+                  ),
                 ),
               ),
             ],
@@ -549,13 +698,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(label,
                     style: const TextStyle(fontSize: 12, color: _tSec)),
                 const SizedBox(height: 2),
-                Text(
-                  value > 0 ? '${money(value)}/g' : 'Not set',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: value > 0 ? _tPrimary : Colors.black38,
-                    height: 1.1,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value > 0 ? '${money(value)}/g' : 'Not set',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: value > 0 ? _tPrimary : Colors.black38,
+                      height: 1.1,
+                    ),
                   ),
                 ),
               ],
@@ -742,17 +897,58 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const SizedBox(height: 6),
-          Text(
-            money(value),
-            style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w700,
-                color: CMBColors.textOnNavyLarge,
-                height: 1.0),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              money(value),
+              maxLines: 1,
+              softWrap: false,
+              style: const TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                  color: CMBColors.textOnNavyLarge,
+                  height: 1.0),
+            ),
           ),
         ],
       ),
     );
+  }
+
+  // ─── Last Synced card (Secondary devices) ────────────────────────────────
+
+  /// Drop-in replacement for [_backupBar] on Secondary devices: shows when this
+  /// device last pulled data from Drive, reusing the backup card's exact
+  /// container + row style ([_backupRow]) for visual consistency.
+  Widget _lastSyncedCard() {
+    final raw = _lastSync;
+    final dt = (raw == null || raw.trim().isEmpty)
+        ? null
+        : DateTime.tryParse(raw);
+    final synced = dt != null;
+    final dot = synced ? Colors.green : Colors.grey;
+    final color = synced ? const Color(0xFF388E3C) : _tSec;
+    final icon = synced ? Icons.cloud_done : Icons.cloud_off;
+    final label = synced
+        ? 'Last synced: ${_fmtSync(dt.toLocal())}'
+        : 'Not yet synced';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _gdBorder, width: 1),
+      ),
+      child: _backupRow(icon, dot, color, label),
+    );
+  }
+
+  String _fmtSync(DateTime dt) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(dt.day)}/${two(dt.month)}/${dt.year} '
+        '${two(dt.hour)}:${two(dt.minute)}';
   }
 
   // ─── Backup status bar ───────────────────────────────────────────────────
@@ -960,3 +1156,29 @@ String _isoDate(DateTime dt) =>
     '${dt.year.toString().padLeft(4, '0')}-'
     '${dt.month.toString().padLeft(2, '0')}-'
     '${dt.day.toString().padLeft(2, '0')}';
+
+/// Blocking overlay shown while a Secondary device pulls fresh data from Drive.
+class _SyncProgressDialog extends StatelessWidget {
+  const _SyncProgressDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        content: Row(
+          children: const [
+            CircularProgressIndicator(color: _navy),
+            SizedBox(width: 20),
+            Expanded(
+              child: Text(
+                'Syncing latest data…',
+                style: TextStyle(fontSize: 15, color: _tPrimary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

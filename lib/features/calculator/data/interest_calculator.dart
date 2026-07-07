@@ -11,13 +11,16 @@ class InterestCalculator {
     required DateTime fromDate,
     required DateTime toDate,
     required double ratePercent,
+    // Pledges born from renewal/part-payment/top-up skip the 7-day minimum
+    // and use a ₹20 floor instead of ₹50.
+    bool isRenewalPledge = false,
   }) {
     // Spec: exclude from date, include to date
     final rawDays = toDate.difference(fromDate).inDays;
     String note = '';
 
     int effectiveDays = rawDays;
-    if (rawDays < 7) {
+    if (!isRenewalPledge && rawDays < 7) {
       effectiveDays = 7;
       note = 'Minimum 7 days applied';
     }
@@ -26,19 +29,21 @@ class InterestCalculator {
         (principal * effectiveDays / 360) * (ratePercent / 100);
     final double interest = _roundUpTo5(rawInterest);
 
-    if (interest < 50.0) {
+    final double minInterest = isRenewalPledge ? 20.0 : 50.0;
+    if (interest < minInterest) {
       return (
-        interest: 50.0,
-        total: principal + 50.0,
-        note: 'Minimum ₹50 interest applied',
+        interest: minInterest,
+        total: principal + minInterest,
+        note: 'Minimum ₹${minInterest.toInt()} interest applied',
       );
     }
 
     return (interest: interest, total: principal + interest, note: note);
   }
 
-  static int effectiveDays(DateTime fromDate, DateTime toDate) {
+  static int effectiveDays(DateTime fromDate, DateTime toDate,
+      {bool isRenewalPledge = false}) {
     final rawDays = toDate.difference(fromDate).inDays;
-    return rawDays < 7 ? 7 : rawDays;
+    return (!isRenewalPledge && rawDays < 7) ? 7 : rawDays;
   }
 }

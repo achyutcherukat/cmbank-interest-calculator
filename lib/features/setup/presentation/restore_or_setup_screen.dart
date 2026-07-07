@@ -7,7 +7,6 @@ import '../../../core/database/app_database.dart';
 import '../../../core/services/database_backup_service.dart';
 import '../../../core/services/drive_service.dart';
 import '../../../core/services/local_backup_service.dart';
-import '../../../core/services/photo_backup_service.dart';
 import '../../backup/presentation/backup_actions.dart';
 import 'first_launch_wizard.dart';
 
@@ -130,7 +129,8 @@ class _RestoreOrSetupScreenState extends State<RestoreOrSetupScreen> {
 
   Future<void> _finishRestore() async {
     await AppDatabase.instance.initialize();
-    PhotoBackupService.instance.needsRestore = true;
+    // Bulk photo restore is gated centrally in
+    // DatabaseBackupService.restoreFromEncrypted (Primary devices only).
     if (!mounted) return;
     await showDialog<void>(
       context: context,

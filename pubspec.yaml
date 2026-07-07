@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 3.0.0+2
 
 environment:
   sdk: ^3.12.1
@@ -45,6 +45,12 @@ dependencies:
   path_provider: ^2.1.4
   http: ^1.2.2
   url_launcher: ^6.3.1
+
+  # --- Printing & PDF (Cash Book / Stock Register reports) ---
+  pdf: ^3.11.3                          # PDF document generation
+  # Capped at 5.13.1 — the last release on web ^0.5.x. printing >=5.13.2 needs
+  # web ^1.0.0 which conflicts with image_cropper 7.x (web ^0.5.1).
+  printing: '>=5.11.0 <5.13.2'         # Android print dialog + PDF layout
 
   # --- Backup & restore stack ---
   flutter_secure_storage: ^9.2.4      # raw AES key in Android Keystore

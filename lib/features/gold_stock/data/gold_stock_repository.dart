@@ -167,7 +167,7 @@ class GoldStockRepository {
     final closingWeight =
         opening.netWeight + goldIn.netWeight - goldOut.netWeight + adj.weight;
     final closingGrossWeight =
-        opening.grossWeight + goldIn.grossWeight - goldOut.grossWeight;
+        opening.grossWeight + goldIn.grossWeight - goldOut.grossWeight + adj.grossWeight;
     final closingCount =
         opening.count + goldIn.count - goldOut.count + adj.count;
     final safeClosing = closingWeight < 0 ? 0.0 : closingWeight;
@@ -188,7 +188,7 @@ class GoldStockRepository {
         'gold_out_gross_weight': goldOut.grossWeight,
         'gold_out_count': goldOut.count,
         'adjustment_weight': adj.weight,
-        'adjustment_gross_weight': 0.0,
+        'adjustment_gross_weight': adj.grossWeight,
         'adjustment_count': adj.count,
         'closing_weight': safeClosing,
         'closing_gross_weight': safeClosingGross,
@@ -212,7 +212,7 @@ class GoldStockRepository {
       goldOutGrossWeight: goldOut.grossWeight,
       goldOutCount: goldOut.count,
       adjustmentWeight: adj.weight,
-      adjustmentGrossWeight: 0.0,
+      adjustmentGrossWeight: adj.grossWeight,
       adjustmentCount: adj.count,
       closingWeight: safeClosing,
       closingGrossWeight: safeClosingGross,
@@ -236,7 +236,7 @@ class GoldStockRepository {
     final closingWeight =
         opening.netWeight + goldIn.netWeight - goldOut.netWeight + adj.weight;
     final closingGrossWeight =
-        opening.grossWeight + goldIn.grossWeight - goldOut.grossWeight;
+        opening.grossWeight + goldIn.grossWeight - goldOut.grossWeight + adj.grossWeight;
     final closingCount =
         opening.count + goldIn.count - goldOut.count + adj.count;
     final safeClosing = closingWeight < 0 ? 0.0 : closingWeight;
@@ -256,7 +256,7 @@ class GoldStockRepository {
       'gold_out_gross_weight': goldOut.grossWeight,
       'gold_out_count': goldOut.count,
       'adjustment_weight': adj.weight,
-      'adjustment_gross_weight': 0.0,
+      'adjustment_gross_weight': adj.grossWeight,
       'adjustment_count': adj.count,
       'closing_weight': safeClosing,
       'closing_gross_weight': safeClosingGross,
@@ -279,7 +279,7 @@ class GoldStockRepository {
       goldOutGrossWeight: goldOut.grossWeight,
       goldOutCount: goldOut.count,
       adjustmentWeight: adj.weight,
-      adjustmentGrossWeight: 0.0,
+      adjustmentGrossWeight: adj.grossWeight,
       adjustmentCount: adj.count,
       closingWeight: safeClosing,
       closingGrossWeight: safeClosingGross,
@@ -534,35 +534,47 @@ class GoldStockRepository {
   Future<void> adjustStock({
     required String date,
     required double weight,
+    double grossWeight = 0,
     required int count,
     required String reason,
     required bool isAdd,
     int? userId,
   }) async {
+    final record = await getForDate(date);
+    if (record?.isLocked == true) throw Exception('Day is locked');
+
     final sign = isAdd ? 1.0 : -1.0;
     final signedWeight = weight * sign;
+    final signedGrossWeight = grossWeight * sign;
     final signedCount = (count * sign).round();
 
-    await _adjustments.addAdjustment(
-      date: date,
-      weight: signedWeight,
-      count: signedCount,
-      reason: reason,
-      userId: userId,
-    );
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      await _adjustments.addAdjustment(
+        date: date,
+        weight: signedWeight,
+        grossWeight: signedGrossWeight,
+        count: signedCount,
+        reason: reason,
+        userId: userId,
+        txn: txn,
+      );
 
-    // Refresh the cached day record.
+      await _audit.log(
+        actionCategory: AuditCategory.dayManagement,
+        action: 'STOCK_ADJUSTED',
+        entityType: 'daily_stock',
+        entityId: date,
+        newValueJson:
+            '{"weight":$signedWeight,"grossWeight":$signedGrossWeight,"count":$signedCount}',
+        reason: reason,
+        createdBy: userId,
+        txn: txn,
+      );
+    });
+
+    // Refresh the cached day record outside the transaction.
     await getOrCreateDayRecord(date);
-
-    await _audit.log(
-      actionCategory: AuditCategory.dayManagement,
-      action: 'STOCK_ADJUSTED',
-      entityType: 'daily_stock',
-      entityId: date,
-      newValueJson: '{"weight":$signedWeight,"count":$signedCount}',
-      reason: reason,
-      createdBy: userId,
-    );
   }
 
   // ─── Verify and lock ───────────────────────────────────────────────────────

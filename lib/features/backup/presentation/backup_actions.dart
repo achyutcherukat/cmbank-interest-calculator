@@ -358,8 +358,11 @@ class BackupActions {
   /// to a fresh app root (logical restart) after a successful restore.
   static Future<void> _finishRestore(BuildContext context) async {
     await AppDatabase.instance.initialize();
-    // Defer photo restore until home screen is mounted so the banner shows.
-    PhotoBackupService.instance.needsRestore = true;
+    // Whether photos are bulk-restored is decided centrally in
+    // DatabaseBackupService.restoreFromEncrypted (Primary only); the home
+    // screen consumes the flag once mounted so the banner is visible.
+    // Secondary devices sync in the foreground (see home_screen) — no
+    // background worker to register here.
     if (!context.mounted) return;
     await showDialog<void>(
       context: context,

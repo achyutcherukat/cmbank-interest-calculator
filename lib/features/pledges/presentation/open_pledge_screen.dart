@@ -14,8 +14,10 @@ import '../../../features/calculator/data/interest_calculator.dart';
 import '../../../features/gold_stock/data/gold_rates_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/restorable_photo_thumb.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../../shared/widgets/shared_split_payment_widget.dart';
 import '../../../core/services/photo_sync_repository.dart';
+import '../data/payment_model.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
 import '../data/pledge_repository.dart';
@@ -304,7 +306,7 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
   List<_ChainEntry> _chain = [];
   List<String> _goldPhotoPaths = [];
   List<String> _idProofPhotoPaths = [];
-  bool _todayLocked = false;
+  bool _pledgeDayLocked = false;
   bool _addingPhoto = false;
 
   @override
@@ -337,9 +339,9 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
             .getByCustomer(pledge!.customerId!)
         : <PhotoSyncEntry>[];
 
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    final todayLocked =
-        await DailyBalanceRepository.instance.isDateLocked(today);
+    final pledgeDayLocked = pledge != null
+        ? await DailyBalanceRepository.instance.isDateLocked(pledge.pledgeDate)
+        : false;
 
     if (mounted) {
       setState(() {
@@ -349,7 +351,7 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
         _chain = chain;
         _goldPhotoPaths = goldPhotos.map((e) => e.localPath).toList();
         _idProofPhotoPaths = idProofPhotos.map((e) => e.localPath).toList();
-        _todayLocked = todayLocked;
+        _pledgeDayLocked = pledgeDayLocked;
         _loading = false;
       });
     }
@@ -443,8 +445,11 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) =>
-              ClosePledgeScreen(pledge: p, contextDate: widget.contextDate)),
+        builder: (_) => ClosePledgeScreen(
+          pledge: p,
+          contextDate: widget.contextDate,
+        ),
+      ),
     );
     if (mounted) Navigator.pop(context);
   }
@@ -453,8 +458,11 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) =>
-              RenewSelectionScreen(pledge: p, contextDate: widget.contextDate)),
+        builder: (_) => RenewSelectionScreen(
+          pledge: p,
+          contextDate: widget.contextDate,
+        ),
+      ),
     );
   }
 
@@ -512,9 +520,11 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              '* Minimum 7 days & ₹50 applied where applicable.',
-              style: TextStyle(fontSize: 13, color: Colors.black54),
+            Text(
+              p.renewalParentId != null
+                  ? '* Minimum ₹20 applied where applicable.'
+                  : '* Minimum 7 days & ₹50 applied where applicable.',
+              style: const TextStyle(fontSize: 13, color: Colors.black54),
             ),
             const SizedBox(height: 12),
             ...offsets.map((extra) {
@@ -524,9 +534,10 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                 fromDate: fromDate,
                 toDate: targetDate,
                 ratePercent: p.interestRate,
+                isRenewalPledge: p.renewalParentId != null,
               );
-              final days =
-                  InterestCalculator.effectiveDays(fromDate, targetDate);
+              final days = InterestCalculator.effectiveDays(fromDate, targetDate,
+                  isRenewalPledge: p.renewalParentId != null);
               final label = extra == 0
                   ? 'Today'
                   : extra == 1
@@ -589,12 +600,14 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
     // "today" is the as-of date: the context date when set, else the real today.
     final today = widget.contextDate ?? DateTime.now();
     final actualDays = today.difference(fromDate).inDays;
-    final effectiveDays = InterestCalculator.effectiveDays(fromDate, today);
+    final effectiveDays = InterestCalculator.effectiveDays(fromDate, today,
+        isRenewalPledge: p.renewalParentId != null);
     final calc = InterestCalculator.calculate(
       principal: p.loanAmount,
       fromDate: fromDate,
       toDate: today,
       ratePercent: p.interestRate,
+      isRenewalPledge: p.renewalParentId != null,
     );
     final asOfLabel = widget.contextDate != null
         ? 'Interest as of ${formatDmy(widget.contextDate!)}'
@@ -720,8 +733,8 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                 DetailRow(
                     label: 'Total Net Weight',
                     value: '${totalNet.toStringAsFixed(2)} g',
-                    isLast: goldPhotos.isEmpty && _todayLocked),
-                if (goldPhotos.isNotEmpty || !_todayLocked) ...[
+                    isLast: goldPhotos.isEmpty && _pledgeDayLocked),
+                if (goldPhotos.isNotEmpty || !_pledgeDayLocked) ...[
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 12,
@@ -738,10 +751,12 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                                       _PhotoViewScreen(file: File(p))),
                             ),
                           )),
-                      if (!_todayLocked)
-                        _AddPhotoButton(
-                          onTap: _addingPhoto ? null : _addGoldPhoto,
-                          loading: _addingPhoto,
+                      if (!_pledgeDayLocked)
+                        RestrictedAction(
+                          child: _AddPhotoButton(
+                            onTap: _addingPhoto ? null : _addGoldPhoto,
+                            loading: _addingPhoto,
+                          ),
                         ),
                     ],
                   ),
@@ -860,8 +875,14 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                                 : () => Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (_) => PledgeDetailScreen(
-                                            pledgeId: _chain[i].pledgeId),
+                                        builder: (_) =>
+                                            _chain[i].status == 'open'
+                                                ? PledgeDetailScreen(
+                                                    pledgeId:
+                                                        _chain[i].pledgeId)
+                                                : ClosedPledgeDetailScreen(
+                                                    pledgeId:
+                                                        _chain[i].pledgeId),
                                       ),
                                     ),
                             child: Container(
@@ -902,19 +923,20 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
             ),
 
           if (p.status == 'open') ...[
-            // Interest due today
             FlowCard(
               backgroundColor: FlowColors.greenLight,
               header: asOfLabel,
               child: Column(
                 children: [
                   DetailRow(
-                      label: 'Days (effective)', value: '$effectiveDays days'),
+                      label: 'Days (effective)',
+                      value: '$effectiveDays days'),
                   DetailRow(
-                      label: 'Interest Due', value: money(calc.interest)),
+                      label: 'Interest Due',
+                      value: money(calc.interest)),
                   DetailRow(
                       label: 'Total Due',
-                      value: money(calc.total),
+                      value: money(p.loanAmount + calc.interest),
                       isLast: true),
                 ],
               ),
@@ -929,7 +951,8 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
             const SizedBox(height: 16),
 
             if (!widget.hideActions) ...[
-              SizedBox(
+              RestrictedAction(
+                child: SizedBox(
                 width: double.infinity,
                 height: 64,
                 child: ElevatedButton.icon(
@@ -948,15 +971,14 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                   ),
                 ),
               ),
+              ),
               const SizedBox(height: 12),
-              SizedBox(
+              RestrictedAction(
+                child: SizedBox(
                 width: double.infinity,
                 height: 64,
-                child: ElevatedButton.icon(
+                child: ElevatedButton(
                   onPressed: () => _goRenew(p),
-                  icon: const Icon(Icons.autorenew, size: 26),
-                  label: const Text('RENEW / PART PAYMENT/ TOP-UP',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: FlowColors.primary,
                     foregroundColor: FlowColors.textOnNavyLarge,
@@ -966,12 +988,30 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                   ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.autorenew, size: 26),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: const Text('RENEW / PART PAYMENT/ TOP-UP',
+                              maxLines: 1,
+                              softWrap: false,
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              ),
               ),
             ],
             if (widget.editEntryContext) ...[
               const SizedBox(height: 12),
-              SizedBox(
+              RestrictedAction(
+                child: SizedBox(
                 width: double.infinity,
                 height: 64,
                 child: ElevatedButton.icon(
@@ -990,6 +1030,7 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
                   ),
                 ),
               ),
+              ),
             ],
           ],
           const SizedBox(height: 20),
@@ -998,6 +1039,126 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
     );
   }
 
+}
+
+// ─── Interest Editor Sheet ────────────────────────────────────────────────────
+
+class _InterestEditorSheet extends StatefulWidget {
+  const _InterestEditorSheet({
+    required this.calculatedInterest,
+    required this.currentOverride,
+    required this.onApply,
+    required this.onReset,
+  });
+
+  final double calculatedInterest;
+  final double? currentOverride;
+  final void Function(double) onApply;
+  final void Function() onReset;
+
+  @override
+  State<_InterestEditorSheet> createState() => _InterestEditorSheetState();
+}
+
+class _InterestEditorSheetState extends State<_InterestEditorSheet> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(
+      text: (widget.currentOverride ?? widget.calculatedInterest)
+          .round()
+          .toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: Colors.black12,
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Edit Interest Amount',
+                  style:
+                      TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(
+                'Calculated: ${money(widget.calculatedInterest)}',
+                style: const TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _ctrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: const TextStyle(
+                    fontSize: 24, fontWeight: FontWeight.bold),
+                decoration: const InputDecoration(
+                  prefixText: '₹ ',
+                  labelText: 'Interest Amount',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  if (widget.currentOverride != null) ...[
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          widget.onReset();
+                        },
+                        child: const Text('Reset to Calculated'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: FlowColors.primary,
+                          foregroundColor: FlowColors.goldRich),
+                      onPressed: () {
+                        final v = double.tryParse(_ctrl.text) ?? 0;
+                        Navigator.pop(context);
+                        widget.onApply(v);
+                      },
+                      child: const Text('Apply'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ─── Chain Entry ──────────────────────────────────────────────────────────────
@@ -1031,6 +1192,555 @@ class _PhotoViewScreen extends StatelessWidget {
           maxScale: 5.0,
           child: Image.file(file),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Closed Pledge Detail Screen ──────────────────────────────────────────────
+
+class ClosedPledgeDetailScreen extends StatefulWidget {
+  const ClosedPledgeDetailScreen({super.key, required this.pledgeId});
+  final int pledgeId;
+
+  @override
+  State<ClosedPledgeDetailScreen> createState() =>
+      _ClosedPledgeDetailScreenState();
+}
+
+class _ClosedPledgeDetailScreenState extends State<ClosedPledgeDetailScreen> {
+  PledgeModel? _pledge;
+  List<PledgeItemModel> _items = [];
+  List<PaymentModel> _payments = [];
+  List<BankAccount> _allAccounts = [];
+  Map<String, dynamic>? _customer;
+  List<_ChainEntry> _chain = [];
+  bool _loading = true;
+  List<String> _goldPhotoPaths = [];
+  List<String> _idProofPhotoPaths = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final pledge =
+        await PledgeRepository.instance.getPledgeById(widget.pledgeId);
+    if (pledge == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+
+    final items =
+        await PledgeRepository.instance.getItemsForPledge(widget.pledgeId);
+    final payments =
+        await PledgeRepository.instance.getPaymentsForPledge(widget.pledgeId);
+
+    Map<String, dynamic>? customer;
+    if (pledge.customerId != null) {
+      customer =
+          await PledgeRepository.instance.getCustomerById(pledge.customerId!);
+    }
+
+    final chain = await _buildChain(pledge);
+    final allAccounts = await BankAccountRepository.instance.getAll();
+
+    final goldPhotos = await PhotoSyncRepository.instance
+        .getByPledge(pledge.id!, PhotoType.gold);
+    final idProofPhotos = pledge.customerId != null
+        ? await PhotoSyncRepository.instance.getByCustomer(pledge.customerId!)
+        : <PhotoSyncEntry>[];
+
+    if (mounted) {
+      setState(() {
+        _pledge = pledge;
+        _items = items;
+        _payments = payments;
+        _allAccounts = allAccounts;
+        _customer = customer;
+        _chain = chain;
+        _goldPhotoPaths = goldPhotos.map((e) => e.localPath).toList();
+        _idProofPhotoPaths = idProofPhotos.map((e) => e.localPath).toList();
+        _loading = false;
+      });
+    }
+  }
+
+  String _bankLabel(int? id) {
+    if (id == null) return 'Bank';
+    final name = _allAccounts
+        .cast<BankAccount?>()
+        .firstWhere((a) => a?.id == id, orElse: () => null)
+        ?.name;
+    return name != null ? 'Bank ($name)' : 'Bank';
+  }
+
+  Future<List<_ChainEntry>> _buildChain(PledgeModel p) async {
+    final chain = <_ChainEntry>[];
+    PledgeModel? cur = p;
+    while (cur != null) {
+      chain.insert(
+          0, _ChainEntry(cur.pledgeNumber, cur.id!, cur.id == p.id, cur.status));
+      if (cur.renewalParentId == null) break;
+      cur = await PledgeRepository.instance.getPledgeById(cur.renewalParentId!);
+    }
+    int limit = 10;
+    PledgeModel? succ =
+        await PledgeRepository.instance.getSuccessorPledge(p.id!);
+    while (succ != null && limit-- > 0) {
+      chain.add(_ChainEntry(succ.pledgeNumber, succ.id!, false, succ.status));
+      succ = await PledgeRepository.instance.getSuccessorPledge(succ.id!);
+    }
+    return chain;
+  }
+
+  String _statusLabel(String? renewType) {
+    switch (renewType) {
+      case RenewType.renewed:
+        return 'RENEWED';
+      case RenewType.partPayment:
+        return 'PART PAYMENT';
+      case RenewType.loanIncrease:
+        return 'LOAN TOP-UP';
+      default:
+        return 'RELEASED';
+    }
+  }
+
+  Color _statusColor(String? renewType) =>
+      renewType == null ? FlowColors.red : FlowColors.orange;
+
+  Color _statusBg(String? renewType) =>
+      renewType == null ? FlowColors.redLight : FlowColors.orangeLight;
+
+  String _paymentTypeLabel(String type) {
+    switch (type) {
+      case PaymentType.loanDisbursed:
+        return 'Loan Disbursed';
+      case PaymentType.loanFullClosure:
+        return 'Closure';
+      case PaymentType.renewalInterestPaid:
+        return 'Renewal Interest';
+      case PaymentType.partPaymentReceived:
+        return 'Part Payment';
+      case PaymentType.loanIncreaseDisbursed:
+        return 'Loan Top-Up';
+      case PaymentType.expense:
+        return 'Expense';
+      case PaymentType.adjustment:
+        return 'Adjustment';
+      default:
+        return type;
+    }
+  }
+
+  String _paymentModeLabel(PaymentModel p) {
+    if (p.cashAmount > 0 && p.bankAmount > 0) return 'SPLIT';
+    if (p.bankAmount > 0) return 'BANK';
+    return 'CASH';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+          backgroundColor: FlowColors.bg,
+          body: Center(child: CircularProgressIndicator()));
+    }
+    final p = _pledge;
+    if (p == null) {
+      return Scaffold(
+        backgroundColor: FlowColors.bg,
+        appBar: AppBar(
+            backgroundColor: FlowColors.primary,
+            foregroundColor: FlowColors.goldRich,
+            title: const Text('Pledge')),
+        body: const Center(child: Text('Pledge not found.')),
+      );
+    }
+
+    final daysHeld = p.closureDate != null && p.pledgeDate.isNotEmpty
+        ? (DateTime.tryParse(p.closureDate!)
+                    ?.difference(
+                        DateTime.tryParse(p.pledgeDate) ?? DateTime.now())
+                    .inDays ??
+                0)
+            .abs()
+        : 0;
+
+    return Scaffold(
+      backgroundColor: FlowColors.bg,
+      appBar: AppBar(
+        backgroundColor: FlowColors.primary,
+        foregroundColor: FlowColors.goldRich,
+        title: Text('Pledge ${p.pledgeNumber}'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Status row
+          Row(
+            children: [
+              StatusBadge(
+                text: _statusLabel(p.renewType),
+                color: _statusColor(p.renewType),
+                backgroundColor: _statusBg(p.renewType),
+                borderColor: _statusColor(p.renewType),
+              ),
+              if (p.status == 'closed') ...[
+                const SizedBox(width: 8),
+                StatusBadge(
+                  text: 'CLOSED',
+                  color: FlowColors.red,
+                  backgroundColor: FlowColors.redLight,
+                  borderColor: FlowColors.red,
+                ),
+              ],
+              if (p.source == 'migrated') ...[
+                const SizedBox(width: 10),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: FlowColors.goldLight,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('Migrated',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: FlowColors.gold,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Pledge Details
+          FlowCard(
+            header: 'Pledge Details',
+            child: Column(
+              children: [
+                DetailRow(label: 'Pledge No.', value: p.pledgeNumber),
+                DetailRow(
+                    label: 'Pledge Date', value: isoToDisplay(p.pledgeDate)),
+                DetailRow(
+                    label: 'Closure Date',
+                    value: isoToDisplay(p.closureDate)),
+                if (p.renewType != null)
+                  DetailRow(
+                      label: 'Type',
+                      value: renewalLabel(p.renewType, p.renewSubtype)),
+                DetailRow(
+                    label: 'Days Held',
+                    value: '$daysHeld days',
+                    isLast: true),
+              ],
+            ),
+          ),
+
+          // Financial Summary
+          FlowCard(
+            backgroundColor: FlowColors.accent,
+            header: 'Financial Summary',
+            child: Column(
+              children: [
+                DetailRow(label: 'Loan Amount', value: money(p.loanAmount)),
+                DetailRow(
+                    label: 'Interest Rate',
+                    value: '${p.interestRate.toStringAsFixed(0)}% p.a.'),
+                DetailRow(
+                    label: 'Interest Paid',
+                    value: money(p.totalInterestPaid)),
+                DetailRow(
+                    label: 'Total Collected',
+                    value: money(p.totalAmountCollected),
+                    isLast: true),
+              ],
+            ),
+          ),
+
+          // Gold Details
+          if (p.grossWeight > 0 ||
+              p.netWeight > 0 ||
+              p.pledgeRate > 0 ||
+              p.purity.isNotEmpty)
+            FlowCard(
+              header: 'Gold Details',
+              child: Column(
+                children: [
+                  if (p.grossWeight > 0)
+                    DetailRow(
+                        label: 'Gross Weight',
+                        value: '${p.grossWeight.toStringAsFixed(2)} g'),
+                  if (p.netWeight > 0)
+                    DetailRow(
+                        label: 'Net Weight',
+                        value: '${p.netWeight.toStringAsFixed(2)} g'),
+                  if (p.purity.isNotEmpty)
+                    DetailRow(label: 'Purity', value: p.purity),
+                  if (p.pledgeRate > 0)
+                    DetailRow(
+                        label: 'Pledge Rate',
+                        value: '${money(p.pledgeRate)}/g'),
+                  if (p.actualItemValue > 0)
+                    DetailRow(
+                        label: 'Item Value',
+                        value: money(p.actualItemValue),
+                        isLast: true)
+                  else
+                    DetailRow(
+                        label: 'Gold Rate',
+                        value:
+                            p.goldRate > 0 ? '${money(p.goldRate)}/g' : '—',
+                        isLast: true),
+                ],
+              ),
+            ),
+
+          // Customer Details
+          if (p.customerName.isNotEmpty || _customer != null)
+            FlowCard(
+              header: 'Customer Details',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (p.customerName.isNotEmpty)
+                    DetailRow(label: 'Name', value: p.customerName),
+                  if (p.customerPhone != null && p.customerPhone!.isNotEmpty)
+                    DetailRow(label: 'Phone', value: p.customerPhone!),
+                  () {
+                    final addr = _customer != null
+                        ? formatCustomerAddress(
+                            address: _customer!['address'] as String?,
+                            district: _customer!['district'] as String?,
+                            state: _customer!['state'] as String?,
+                            pinCode: _customer!['pin_code'] as String?,
+                          )
+                        : (p.customerAddress ?? '');
+                    if (addr.isEmpty) return const SizedBox.shrink();
+                    return DetailRow(label: 'Address', value: addr);
+                  }(),
+                  if (_customer != null) ...[
+                    if ((_customer!['id_proof_type'] as String?)?.isNotEmpty ==
+                        true)
+                      DetailRow(
+                          label: 'ID Proof Type',
+                          value: _customer!['id_proof_type'] as String),
+                    if ((_customer!['id_proof_number'] as String?)?.isNotEmpty ==
+                        true)
+                      DetailRow(
+                          label: 'ID Proof No.',
+                          value: _customer!['id_proof_number'] as String,
+                          isLast: true),
+                    if (_idProofPhotoPaths.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('ID Proof Photos',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.black54,
+                                    fontWeight: FontWeight.w500)),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: _idProofPhotoPaths
+                                  .map((path) => RestorablePhotoThumb(
+                                        localPath: path,
+                                        width: 100,
+                                        height: 80,
+                                        onView: (resolved) => Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                              builder: (_) => _PhotoViewScreen(
+                                                  file: File(resolved))),
+                                        ),
+                                      ))
+                                  .toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+
+          // Item Details
+          if (_items.isNotEmpty)
+            for (int i = 0; i < _items.length; i++)
+              FlowCard(
+                header: _items.length == 1
+                    ? 'Item Details'
+                    : 'Item List ${i + 1} of ${_items.length}',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_items[i].itemType.isNotEmpty &&
+                        _items[i].itemType != 'Other')
+                      DetailRow(
+                          label: 'Item Types', value: _items[i].itemType),
+                    DetailRow(
+                        label: 'Total Quantity',
+                        value: '${_items[i].quantity}'),
+                    if (_items[i].grossWeight > 0)
+                      DetailRow(
+                          label: 'Gross Weight',
+                          value:
+                              '${_items[i].grossWeight.toStringAsFixed(2)} g'),
+                    DetailRow(
+                        label: 'Net Weight',
+                        value:
+                            '${_items[i].netWeight.toStringAsFixed(2)} g'),
+                    DetailRow(
+                        label: 'Purity',
+                        value: _items[i].purity.isEmpty
+                            ? 'Not specified'
+                            : _items[i].purity),
+                    if (_items[i].notes != null && _items[i].notes!.isNotEmpty)
+                      DetailRow(
+                          label: 'Notes',
+                          value: _items[i].notes!,
+                          isLast: true),
+                  ],
+                ),
+              ),
+
+          // Gold Photos
+          if (_goldPhotoPaths.isNotEmpty)
+            FlowCard(
+              header: 'Gold Photos',
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _goldPhotoPaths
+                    .map((ph) => RestorablePhotoThumb(
+                          localPath: ph,
+                          width: 100,
+                          height: 80,
+                          onView: (resolved) => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    _PhotoViewScreen(file: File(resolved))),
+                          ),
+                        ))
+                    .toList(),
+              ),
+            ),
+
+          // Payment Breakdown
+          if (_payments.isNotEmpty)
+            FlowCard(
+              backgroundColor: FlowColors.greenLight,
+              borderColor: FlowColors.green,
+              child: Column(
+                children: [
+                  const FlowCardTitle('Payment Breakdown'),
+                  for (int i = 0; i < _payments.length; i++) ...[
+                    if (i > 0) const Divider(height: 20),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${_paymentTypeLabel(_payments[i].paymentType)} · ${isoToDisplay(_payments[i].paymentDate.length >= 10 ? _payments[i].paymentDate.substring(0, 10) : _payments[i].paymentDate)}',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.black54,
+                            fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    DetailRow(
+                        label: 'Total', value: money(_payments[i].amount)),
+                    if (_payments[i].cashAmount > 0)
+                      DetailRow(
+                          label: 'Cash',
+                          value: money(_payments[i].cashAmount)),
+                    if (_payments[i].bankAmount > 0)
+                      DetailRow(
+                          label: _bankLabel(_payments[i].bankAccountId),
+                          value: money(_payments[i].bankAmount)),
+                    DetailRow(
+                        label: 'Mode',
+                        value: _paymentModeLabel(_payments[i]),
+                        isLast: i == _payments.length - 1),
+                  ],
+                ],
+              ),
+            ),
+
+          // Renewal Chain
+          if (_chain.length > 1)
+            FlowCard(
+              backgroundColor: FlowColors.accent,
+              header: 'Renewal Chain',
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (int i = 0; i < _chain.length; i++) ...[
+                      if (i > 0)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4),
+                          child: Icon(Icons.arrow_forward,
+                              size: 14, color: Colors.black38),
+                        ),
+                      GestureDetector(
+                        onTap: _chain[i].isCurrent
+                            ? null
+                            : () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => _chain[i].status == 'open'
+                                        ? PledgeDetailScreen(
+                                            pledgeId: _chain[i].pledgeId)
+                                        : ClosedPledgeDetailScreen(
+                                            pledgeId: _chain[i].pledgeId),
+                                  ),
+                                ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: _chain[i].isCurrent
+                                ? FlowColors.primary
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: _chain[i].isCurrent
+                                  ? FlowColors.primary
+                                  : FlowColors.primaryLight,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Text(
+                            '#${_chain[i].pledgeNumber}',
+                            style: TextStyle(
+                              color: _chain[i].isCurrent
+                                  ? Colors.white
+                                  : FlowColors.primary,
+                              fontWeight: _chain[i].isCurrent
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+          const SizedBox(height: 20),
+        ],
       ),
     );
   }
@@ -1090,12 +1800,21 @@ class _AddPhotoButton extends StatelessWidget {
 // ─── Close Pledge Screen ──────────────────────────────────────────────────────
 
 class ClosePledgeScreen extends StatefulWidget {
-  const ClosePledgeScreen({super.key, required this.pledge, this.contextDate});
+  const ClosePledgeScreen({
+    super.key,
+    required this.pledge,
+    this.contextDate,
+    this.initialInterest,
+  });
   final PledgeModel pledge;
 
   /// Backdated closure date. When set, interest is computed up to this date and
   /// all DB writes (closure_date, closed_at, payment_date, gold OUT) use it.
   final DateTime? contextDate;
+
+  /// Pre-set interest override from the detail screen. When null, interest is
+  /// calculated fresh from [InterestCalculator].
+  final double? initialInterest;
 
   @override
   State<ClosePledgeScreen> createState() => _ClosePledgeScreenState();
@@ -1109,7 +1828,8 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
   List<BankAccount> _bankAccounts = const [];
 
   late final double _interest;
-  late final double _total;
+  late final double _minInterest;
+  double? _customInterest;
 
   @override
   void initState() {
@@ -1121,9 +1841,10 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
       fromDate: from,
       toDate: widget.contextDate ?? DateTime.now(),
       ratePercent: widget.pledge.interestRate,
+      isRenewalPledge: widget.pledge.renewalParentId != null,
     );
-    _interest = calc.interest;
-    _total = calc.total;
+    _minInterest = calc.interest;
+    _interest = widget.initialInterest ?? calc.interest;
     _loadBankAccounts();
   }
 
@@ -1150,13 +1871,69 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
     );
   }
 
+  Future<void> _showInterestEditor() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _InterestEditorSheet(
+        calculatedInterest: _interest,
+        currentOverride: _customInterest,
+        onApply: (v) {
+          if (v > 0) setState(() => _customInterest = v);
+        },
+        onReset: () => setState(() => _customInterest = null),
+      ),
+    );
+  }
+
   Future<void> _confirmClose() async {
+    final effectiveInterest = _customInterest ?? _interest;
+    final effectiveTotal = widget.pledge.loanAmount + effectiveInterest;
+
     final payErr = _payKey.currentState?.validate();
     if (payErr != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(payErr), backgroundColor: Colors.red),
       );
       return;
+    }
+
+    // Below-minimum interest warning (non-blocking — staff can override)
+    if (effectiveInterest < _minInterest) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text(
+            'Interest Below Standard Minimum',
+            style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: FlowColors.orange),
+          ),
+          content: Text(
+            'The interest (${money(effectiveInterest)}) is below the standard minimum '
+            '(${money(_minInterest)}). Confirm this is a deliberate discount?',
+            style: const TextStyle(fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: FlowColors.orange,
+                  foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Yes, Apply Discount'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || proceed != true) return;
     }
 
     final confirmed = await showDialog<bool>(
@@ -1220,7 +1997,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
                   _amtRow('Principal',
                       money(widget.pledge.loanAmount)),
                   const SizedBox(height: 8),
-                  _amtRow('Interest', money(_interest)),
+                  _amtRow('Interest', money(effectiveInterest)),
                   const SizedBox(height: 12),
                   const Divider(
                       height: 1,
@@ -1240,7 +2017,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
                         ),
                       ),
                       Text(
-                        money(_total),
+                        money(effectiveTotal),
                         style: const TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.bold,
@@ -1325,13 +2102,13 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
     setState(() => _isSaving = true);
     try {
       final payState = _payKey.currentState;
-      final cashAmt = payState?.cashAmount ?? _total;
+      final cashAmt = payState?.cashAmount ?? effectiveTotal;
       final bankAmt = payState?.bankAmount ?? 0;
 
       await PledgeRepository.instance.closePledge(
         pledgeId: widget.pledge.id!,
-        totalInterestPaid: _interest,
-        totalAmountCollected: _total,
+        totalInterestPaid: effectiveInterest,
+        totalAmountCollected: effectiveTotal,
         cashAmount: cashAmt,
         bankAmount: bankAmt,
         bankAccountId: payState?.bankAccountId,
@@ -1341,7 +2118,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
       if (mounted) {
         setState(() {
           _donePledgeNo = widget.pledge.pledgeNumber;
-          _doneTotal = _total;
+          _doneTotal = effectiveTotal;
           _isSaving = false;
         });
       }
@@ -1365,6 +2142,10 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
           pledgeNo: _donePledgeNo!, amount: _doneTotal ?? 0);
     }
 
+    final effectiveInterest = _customInterest ?? _interest;
+    final effectiveTotal = widget.pledge.loanAmount + effectiveInterest;
+    final isOverridden = _customInterest != null;
+
     return Scaffold(
       backgroundColor: FlowColors.bg,
       appBar: AppBar(
@@ -1379,17 +2160,51 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
             ContextDateBanner(
                 label: 'Closure Date', date: widget.contextDate!),
           FlowCard(
-            backgroundColor: FlowColors.goldLight,
-            header: 'Closure Summary',
+            backgroundColor:
+                isOverridden ? FlowColors.orangeLight : FlowColors.goldLight,
+            header: isOverridden ? 'Closure Summary (Custom)' : 'Closure Summary',
             child: Column(
               children: [
                 DetailRow(
                     label: 'Principal',
                     value: money(widget.pledge.loanAmount)),
-                DetailRow(label: 'Interest', value: money(_interest)),
+                RestrictedAction(
+                  child: GestureDetector(
+                    onTap: _showInterestEditor,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Interest',
+                              style: TextStyle(
+                                  fontSize: 17, color: FlowColors.medText)),
+                          Row(children: [
+                            Text(
+                              money(effectiveInterest),
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: isOverridden
+                                    ? FlowColors.orange
+                                    : FlowColors.primary,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Icon(Icons.edit,
+                                size: 15,
+                                color: isOverridden
+                                    ? FlowColors.orange
+                                    : Colors.black38),
+                          ]),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
                 DetailRow(
                     label: 'Total Due',
-                    value: money(_total),
+                    value: money(effectiveTotal),
                     isLast: true),
               ],
             ),
@@ -1398,12 +2213,13 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
           const FlowSectionTitle('Payment Mode'),
           SharedSplitPaymentWidget(
             key: _payKey,
-            total: _total,
+            total: effectiveTotal,
             totalLabel: 'Total Due',
             bankAccounts: _bankAccounts,
           ),
           const SizedBox(height: 20),
-          SizedBox(
+          RestrictedAction(
+            child: SizedBox(
             width: double.infinity,
             height: 64,
             child: ElevatedButton.icon(
@@ -1423,6 +2239,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
                   foregroundColor: FlowColors.textOnNavyLarge,
                   side: const BorderSide(color: FlowColors.borderOnNavy, width: 0.8)),
             ),
+          ),
           ),
           const SizedBox(height: 16),
         ],
@@ -1529,98 +2346,117 @@ Widget _renewProceedBtn(VoidCallback onTap) {
 
 // ─── Renew Selection Screen ───────────────────────────────────────────────────
 
-class RenewSelectionScreen extends StatelessWidget {
-  const RenewSelectionScreen({super.key, required this.pledge, this.contextDate});
+class RenewSelectionScreen extends StatefulWidget {
+  const RenewSelectionScreen({
+    super.key,
+    required this.pledge,
+    this.contextDate,
+    this.overrideInterest,
+  });
   final PledgeModel pledge;
 
   /// Backdated renewal date. When set, interest is computed up to this date and
   /// all renewal DB writes (old closure, new start, payments, gold) use it.
   final DateTime? contextDate;
 
-  @override
-  Widget build(BuildContext context) {
-    final from = DateTime.tryParse(pledge.pledgeDate) ?? DateTime.now();
-    final calc = InterestCalculator.calculate(
-      principal: pledge.loanAmount,
-      fromDate: from,
-      toDate: contextDate ?? DateTime.now(),
-      ratePercent: pledge.interestRate,
-    );
+  /// Pre-set interest override (currently unused — editing happens on this screen).
+  final double? overrideInterest;
 
-    return Scaffold(
-      backgroundColor: FlowColors.bg,
-      appBar: AppBar(
-        backgroundColor: FlowColors.primary,
-        foregroundColor: FlowColors.goldRich,
-        title: const Text('Renew Pledge'),
+  @override
+  State<RenewSelectionScreen> createState() => _RenewSelectionScreenState();
+}
+
+class _RenewSelectionScreenState extends State<RenewSelectionScreen> {
+  late final double _calculatedInterest;
+  double? _customInterest;
+
+  @override
+  void initState() {
+    super.initState();
+    final from =
+        DateTime.tryParse(widget.pledge.pledgeDate) ?? DateTime.now();
+    final calc = InterestCalculator.calculate(
+      principal: widget.pledge.loanAmount,
+      fromDate: from,
+      toDate: widget.contextDate ?? DateTime.now(),
+      ratePercent: widget.pledge.interestRate,
+      isRenewalPledge: widget.pledge.renewalParentId != null,
+    );
+    _calculatedInterest = calc.interest;
+    _customInterest = widget.overrideInterest;
+  }
+
+  Future<void> _showInterestEditor() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _InterestEditorSheet(
+        calculatedInterest: _calculatedInterest,
+        currentOverride: _customInterest,
+        onApply: (v) {
+          if (v > 0) setState(() => _customInterest = v);
+        },
+        onReset: () => setState(() => _customInterest = null),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    );
+  }
+
+  Widget _pledgeSummaryCardEditable(
+      PledgeModel pledge, double interest, double total, bool isOverridden) {
+    return FlowCard(
+      backgroundColor:
+          isOverridden ? FlowColors.orangeLight : FlowColors.accent,
+      header: isOverridden ? 'Current Pledge (Custom)' : 'Current Pledge',
+      child: Column(
         children: [
-          if (contextDate != null)
-            ContextDateBanner(label: 'Renewal Date', date: contextDate!),
-          _pledgeSummaryCard(pledge, calc.interest, calc.total),
-          const SizedBox(height: 20),
-          _navBtn(
-            context,
-            icon: Icons.currency_rupee,
-            title: 'Renew Pledge',
-            subtitle: 'Pay interest & renew or capitalise interest',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => _RenewPledgeScreen(
-                  pledge: pledge,
-                  interest: calc.interest,
-                  total: calc.total,
-                  contextDate: contextDate,
+          DetailRow(label: 'Pledge No.', value: '#${pledge.pledgeNumber}'),
+          DetailRow(label: 'Date', value: isoToDisplay(pledge.pledgeDate)),
+          if (pledge.customerName.isNotEmpty)
+            DetailRow(label: 'Customer', value: pledge.customerName),
+          DetailRow(label: 'Loan Amount', value: money(pledge.loanAmount)),
+          RestrictedAction(
+            child: GestureDetector(
+              onTap: _showInterestEditor,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Interest Today',
+                        style: TextStyle(
+                            fontSize: 17, color: FlowColors.medText)),
+                    Row(children: [
+                      Text(
+                        money(interest),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: isOverridden
+                              ? FlowColors.orange
+                              : FlowColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(Icons.edit,
+                          size: 15,
+                          color: isOverridden
+                              ? FlowColors.orange
+                              : Colors.black38),
+                    ]),
+                  ],
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          _navBtn(
-            context,
-            icon: Icons.payments,
-            title: 'Part Payment',
-            subtitle: 'Make a partial payment on this pledge',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => _PartPaymentScreen(
-                  pledge: pledge,
-                  interest: calc.interest,
-                  total: calc.total,
-                  contextDate: contextDate,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _navBtn(
-            context,
-            icon: Icons.trending_up,
-            title: 'Loan Top-Up',
-            subtitle: 'Increase the loan amount on this pledge',
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => _IncreaseLoanScreen(
-                  pledge: pledge,
-                  interest: calc.interest,
-                  total: calc.total,
-                  contextDate: contextDate,
-                ),
-              ),
-            ),
-          ),
+          DetailRow(label: 'Total Due', value: money(total), isLast: true),
         ],
       ),
     );
   }
 
-  Widget _navBtn(
-    BuildContext context, {
+  Widget _navBtn({
     required IconData icon,
     required String title,
     required String subtitle,
@@ -1663,6 +2499,83 @@ class RenewSelectionScreen extends StatelessWidget {
             const Icon(Icons.chevron_right, color: FlowColors.goldRich, size: 28),
           ],
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final displayInterest = _customInterest ?? _calculatedInterest;
+    final displayTotal = widget.pledge.loanAmount + displayInterest;
+    final isOverridden = _customInterest != null;
+
+    return Scaffold(
+      backgroundColor: FlowColors.bg,
+      appBar: AppBar(
+        backgroundColor: FlowColors.primary,
+        foregroundColor: FlowColors.goldRich,
+        title: const Text('Renew Pledge'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (widget.contextDate != null)
+            ContextDateBanner(
+                label: 'Renewal Date', date: widget.contextDate!),
+          _pledgeSummaryCardEditable(
+              widget.pledge, displayInterest, displayTotal, isOverridden),
+          const SizedBox(height: 20),
+          _navBtn(
+            icon: Icons.currency_rupee,
+            title: 'Renew Pledge',
+            subtitle: 'Pay interest & renew or capitalise interest',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => _RenewPledgeScreen(
+                  pledge: widget.pledge,
+                  interest: displayInterest,
+                  total: displayTotal,
+                  contextDate: widget.contextDate,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _navBtn(
+            icon: Icons.payments,
+            title: 'Part Payment',
+            subtitle: 'Make a partial payment on this pledge',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => _PartPaymentScreen(
+                  pledge: widget.pledge,
+                  interest: displayInterest,
+                  total: displayTotal,
+                  contextDate: widget.contextDate,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _navBtn(
+            icon: Icons.trending_up,
+            title: 'Loan Top-Up',
+            subtitle: 'Increase the loan amount on this pledge',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => _IncreaseLoanScreen(
+                  pledge: widget.pledge,
+                  interest: displayInterest,
+                  total: displayTotal,
+                  contextDate: widget.contextDate,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2682,7 +3595,8 @@ class __RenewalSummaryScreenState extends State<_RenewalSummaryScreen> {
             ),
           ],
           const SizedBox(height: 8),
-          SizedBox(
+          RestrictedAction(
+            child: SizedBox(
             width: double.infinity,
             height: 64,
             child: ElevatedButton.icon(
@@ -2711,6 +3625,7 @@ class __RenewalSummaryScreenState extends State<_RenewalSummaryScreen> {
               ),
             ),
           ),
+          ),
           const SizedBox(height: 20),
         ],
       ),
@@ -2735,76 +3650,89 @@ class _RenewalSuccessScreen extends StatelessWidget {
   final String? oldPledgeNo;
   final double? amount;
 
+  void _goToActiveLoans(BuildContext context) {
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const OpenPledgeScreen()),
+      (route) => route.isFirst,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: FlowColors.bg,
-      appBar: AppBar(
-        backgroundColor: FlowColors.primary,
-        foregroundColor: FlowColors.goldRich,
-        title: Text(title),
-        automaticallyImplyLeading: false,
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.check_circle,
-                  color: FlowColors.green, size: 80),
-              const SizedBox(height: 20),
-              Text(title,
-                  style: const TextStyle(
-                      fontSize: 26,
-                      color: FlowColors.green,
-                      fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              _RenewalSuccessCard(
-                oldPledgeNo: oldPledgeNo,
-                newPledgeNo: newPledgeNo,
-                amount: amount,
-              ),
-              const SizedBox(height: 28),
-              SizedBox(
-                width: double.infinity,
-                height: 58,
-                child: OutlinedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.print),
-                  label: const Text('PRINT',
-                      style: TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold)),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(
-                        color: FlowColors.primary, width: 1.5),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _goToActiveLoans(context);
+      },
+      child: Scaffold(
+        backgroundColor: FlowColors.bg,
+        appBar: AppBar(
+          backgroundColor: FlowColors.primary,
+          foregroundColor: FlowColors.goldRich,
+          title: Text(title),
+          automaticallyImplyLeading: false,
+        ),
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.check_circle,
+                    color: FlowColors.green, size: 80),
+                const SizedBox(height: 20),
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 26,
+                        color: FlowColors.green,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                _RenewalSuccessCard(
+                  oldPledgeNo: oldPledgeNo,
+                  newPledgeNo: newPledgeNo,
+                  amount: amount,
+                ),
+                const SizedBox(height: 28),
+                SizedBox(
+                  width: double.infinity,
+                  height: 58,
+                  child: OutlinedButton.icon(
+                    onPressed: () {},
+                    icon: const Icon(Icons.print),
+                    label: const Text('PRINT',
+                        style: TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.bold)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(
+                          color: FlowColors.primary, width: 1.5),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                height: 58,
-                child: ElevatedButton.icon(
-                  onPressed: () =>
-                      Navigator.of(context).popUntil((route) => route.isFirst),
-                  icon: const Icon(Icons.home),
-                  label: const Text('GO HOME',
-                      style: TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: FlowColors.primary,
-                    foregroundColor: FlowColors.textOnNavyLarge,
-                    side: const BorderSide(
-                        color: FlowColors.borderOnNavy, width: 0.8),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 58,
+                  child: ElevatedButton.icon(
+                    onPressed: () =>
+                        Navigator.of(context).popUntil((route) => route.isFirst),
+                    icon: const Icon(Icons.home),
+                    label: const Text('GO HOME',
+                        style: TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: FlowColors.primary,
+                      foregroundColor: FlowColors.textOnNavyLarge,
+                      side: const BorderSide(
+                          color: FlowColors.borderOnNavy, width: 0.8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

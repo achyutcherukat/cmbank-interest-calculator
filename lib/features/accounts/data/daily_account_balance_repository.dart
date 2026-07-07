@@ -1,3 +1,5 @@
+import 'package:sqflite/sqflite.dart';
+
 import '../../../core/database/app_database.dart';
 import 'bank_account_model.dart';
 import 'bank_account_repository.dart';
@@ -70,11 +72,18 @@ class DailyAccountBalanceRepository {
   // ─── Lock ────────────────────────────────────────────────────────────────────
 
   /// Freezes per-account closing values for [date] into daily_account_balance.
-  /// Called by DailyBalanceRepository.lockDay immediately after locking daily_balance.
-  Future<void> lockAllForDate(String date, int dailyBalanceId) async {
-    final db = await AppDatabase.instance.database;
+  /// Called by DailyBalanceRepository.lockDay inside the day-lock transaction —
+  /// pass [txn] so every read/write here runs on that transaction (queries on
+  /// the main database handle would deadlock while it is open).
+  Future<void> lockAllForDate(String date, int dailyBalanceId,
+      {DatabaseExecutor? txn}) async {
+    final db = txn ?? await AppDatabase.instance.database;
     final now = DateTime.now().toIso8601String();
-    final accounts = await _bankAccounts.getActiveForDate(date);
+    final accountRows = await db.query('bank_accounts',
+        where: 'is_active = 1 AND start_date <= ?',
+        whereArgs: [date],
+        orderBy: 'name ASC');
+    final accounts = accountRows.map(BankAccount.fromMap).toList();
 
     for (final acct in accounts) {
       final opening =

@@ -65,13 +65,24 @@ class _EditPledgeSearchScreenState extends State<EditPledgeSearchScreen> {
         return;
       }
 
-      // Check: this pledge was not itself created by a renewal/part-payment/top-up
+      // Check: this pledge was not itself created by a renewal/part-payment/top-up.
+      // Exception: if the parent pledge was created AND closed on the same calendar
+      // day (same-day migration+closure), the data error carried over from the
+      // parent so editing is allowed — the parent is already closed.
       if (pledge.renewalParentId != null) {
-        setState(() {
-          _result = _SearchResult.renewalChild;
-          _searching = false;
-        });
-        return;
+        final parent = await PledgeRepository.instance
+            .getPledgeById(pledge.renewalParentId!);
+        final sameDayClosure = parent != null &&
+            parent.closureDate != null &&
+            parent.closureDate == parent.createdAt.substring(0, 10);
+        if (!sameDayClosure) {
+          setState(() {
+            _result = _SearchResult.renewalChild;
+            _searching = false;
+          });
+          return;
+        }
+        // Same-day migration closure — fall through to remaining checks.
       }
 
       final db = await AppDatabase.instance.database;

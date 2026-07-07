@@ -53,6 +53,18 @@ class DatabaseBackupService {
   /// Runs a full database backup to Drive. [scheduled] controls whether a push
   /// notification is sent on failure (only scheduled failures notify, per spec).
   Future<BackupResult> backupToDrive({bool scheduled = false}) async {
+    // Secondary devices are read-only mirrors: they only ever restore from
+    // Drive, never back up to it. This is the single hard guarantee — it blocks
+    // every caller (scheduled worker, manual backup, any future trigger).
+    // Silent no-op: no upload, no backup_log entry, no failure notification.
+    final mode = (await _settings.getString('device_mode'))?.trim().toLowerCase();
+    if (mode == 'secondary') {
+      return const BackupResult(
+        success: false,
+        message: 'This device is read-only and does not back up to Drive.',
+      );
+    }
+
     // 1. Drive must be authenticated.
     if (!DriveService.instance.isAuthenticated()) {
       final restored = await DriveService.instance.trySilentSignIn();
@@ -224,6 +236,12 @@ class DatabaseBackupService {
     String adminPin, {
     required String destination,
   }) async {
+    // Capture this device's identity BEFORE the restore overwrites the local
+    // settings table with the Primary device's values from the backup. Used
+    // below to re-pin a Secondary device back to itself.
+    final priorMode = await _settings.getString('device_mode');
+    final priorName = await _settings.getString('device_name');
+
     // v2 format: detect cleartext header and pre-populate the key recovery
     // copy in settings so decryption works even on a completely fresh install.
     var payload = encrypted;
@@ -342,6 +360,53 @@ class DatabaseBackupService {
       throw const RestoreException(RestoreErrorKind.storage,
           'Not enough storage space to restore.');
     }
+
+    // The restored settings table now holds whatever the Primary device that
+    // created this backup had. Re-pin this device's identity so a Secondary
+    // device never appears as Primary, and record the sync time. The first DB
+    // access here transparently re-opens the freshly-restored database (the
+    // live connection was closed for the atomic swap above). This runs before
+    // the function returns, so there is no window where the app considers
+    // itself Primary after a Secondary restore.
+    final wasSecondary = (priorMode ?? '').trim().toLowerCase() == 'secondary';
+    if (wasSecondary) {
+      final name = (priorName == null || priorName.trim().isEmpty)
+          ? 'Secondary Device'
+          : priorName;
+      await _settings.upsertMany({
+        'device_mode': (value: 'secondary', type: 'string'),
+        'device_name': (value: name, type: 'string'),
+        'last_sync_from_drive': (
+          value: DateTime.now().toIso8601String(),
+          type: 'string'
+        ),
+      });
+    }
+
+    // Centralised bulk photo auto-restore gate, keyed off this device's actual
+    // identity after re-pinning. Only Primary devices bulk-download missing
+    // photos; Secondary devices skip it entirely (the inline per-photo
+    // tap-to-restore mechanism is independent and keeps working). UI call sites
+    // no longer set this flag — the decision lives here so it applies to every
+    // restore path (wizard, manual, and the scheduled sync).
+    final effectiveMode = wasSecondary
+        ? 'secondary'
+        : ((await _settings.getString('device_mode'))?.trim().toLowerCase() ??
+            'primary');
+    PhotoBackupService.instance.needsRestore = effectiveMode == 'primary';
+
+    // Persist the AES backup key into the Android Keystore so future headless
+    // restores (the Secondary 30-minute background sync) can decrypt without an
+    // admin PIN. On a Secondary device the key is otherwise only recovered into
+    // memory during this interactive restore and is unavailable to the
+    // background isolate. recoverKeyWithPin re-derives it from the just-restored
+    // recovery copy using the PIN entered here and writes it to the Keystore.
+    // Best-effort — a failure here must not fail the restore itself.
+    try {
+      if (!await EncryptionService.instance.hasKeystoreKey()) {
+        await EncryptionService.instance.recoverKeyWithPin(adminPin);
+      }
+    } catch (_) {}
 
     await BackupLogRepository.instance.log(
       operation: BackupOperation.restore,

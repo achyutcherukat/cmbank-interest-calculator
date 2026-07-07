@@ -1,5 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
+import 'chart_of_accounts_sync.dart';
+
 class SeedData {
   const SeedData._();
 
@@ -60,6 +62,10 @@ class SeedData {
     }
 
     await batch.commit(noResult: true);
+
+    // Chart of accounts: fixed + standalone defaults, plus linked ledger
+    // accounts for the expense categories seeded above.
+    await ChartOfAccountsSync.seedDefaults(db);
   }
 
   /// Idempotently ensures the future-proof backup settings keys exist on
@@ -140,6 +146,8 @@ class SeedData {
     'opening_stock_weight': ('0', 'int'),
     'opening_stock_count': ('0', 'int'),
     'device_setup_complete': ('false', 'bool'),
+    // --- One-off production data-fix tracking (see data_fix_script.dart) ---
+    'last_data_fix_applied': ('0', 'int'),
     // --- Future-proof multi-device keys (Part 1; no active functionality yet) ---
     'device_mode': ('primary', 'string'),
     'device_name': ('Counter', 'string'),
@@ -151,5 +159,8 @@ class SeedData {
     'backup_key_encrypted': ('', 'string'),
     // --- Crash recovery: 'true' when last run shut down cleanly (Part 7) ---
     'clean_shutdown': ('true', 'bool'),
+    // --- Ledger (reserved for the Opening Balance Wizard, later prompt) ---
+    'ledger_start_date': ('2026-06-30', 'string'),
+    'ledger_opening_posted': ('false', 'bool'),
   };
 }

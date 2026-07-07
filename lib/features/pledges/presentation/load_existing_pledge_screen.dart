@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../app/theme.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../../shared/widgets/shared_customer_details_step.dart';
 import '../../../shared/widgets/shared_item_details_step.dart';
 import '../../customers/data/customer_repository.dart';
@@ -676,14 +677,40 @@ class _LoadExistingPledgeScreenState
     // Migrated pledges in edit mode: pledge number and date are fully editable
     // (staff-entered historical facts that may need correction).
     // New Loan pledges in edit mode: pledge number stays locked (system-sequenced).
+    // Exception: renewal-child pledges lock all Step 1 fields regardless of source
+    // to prevent accounting issues in payments/stock register.
     final isMigratedEdit =
         widget.editMode && widget.existingPledge?.source == 'migrated';
-    final readOnly = widget.editMode && !isMigratedEdit;
+    final readOnly = (widget.editMode && !isMigratedEdit) ||
+        (widget.editMode &&
+            widget.existingPledge?.renewalParentId != null);
     final dateReadOnly =
         !widget.openDateEditable || (widget.editMode && !isMigratedEdit);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (readOnly && widget.existingPledge?.renewalParentId != null)
+          Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 14),
+            decoration: BoxDecoration(
+              color: FlowColors.orangeLight,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: FlowColors.orange),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, color: FlowColors.orange, size: 18),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Step 1 details are read-only — this pledge was created from a renewal or loan increase and its details cannot be changed.',
+                    style: TextStyle(fontSize: 13, color: FlowColors.orange),
+                  ),
+                ),
+              ],
+            ),
+          ),
         const _SecHeader('Pledge Number'),
         Padding(
           padding: const EdgeInsets.only(bottom: 4),
@@ -796,16 +823,27 @@ class _LoadExistingPledgeScreenState
         _numberField('Loan Amount (₹)', _loanAmtCtrl,
             prefixText: '₹ ',
             indianFormat: true,
+            readOnly: readOnly,
             focusNode: _loanAmtFocus,
             textInputAction: TextInputAction.next,
             onSubmitted: (_) => _grossFocus.requestFocus()),
+        if (readOnly && widget.existingPledge?.renewalParentId != null)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 14),
+            child: Text(
+              'Loan amount cannot be changed.',
+              style: TextStyle(color: Colors.black54, fontSize: 13),
+            ),
+          ),
         const _SecHeader('Gold Weights'),
         _decimalField('Gross Weight (grams)', _grossWeightCtrl,
             focusNode: _grossFocus,
+            readOnly: readOnly,
             textInputAction: TextInputAction.next,
             onSubmitted: (_) => _netFocus.requestFocus()),
         _decimalField('Net Weight (grams)', _netWeightCtrl,
             focusNode: _netFocus,
+            readOnly: readOnly,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => FocusScope.of(context).unfocus()),
         const SizedBox(height: 8),
@@ -1338,7 +1376,8 @@ class _LoadExistingPledgeScreenState
         ),
 
         const SizedBox(height: 24),
-        SizedBox(
+        RestrictedAction(
+          child: SizedBox(
           width: double.infinity,
           height: 64,
           child: ElevatedButton.icon(
@@ -1362,6 +1401,7 @@ class _LoadExistingPledgeScreenState
                   borderRadius: BorderRadius.circular(12)),
             ),
           ),
+        ),
         ),
         const SizedBox(height: 20),
       ],
@@ -1547,7 +1587,8 @@ class _LoadExistingPledgeScreenState
 
     if (!migrateFlow) {
       return [
-        SizedBox(
+        RestrictedAction(
+          child: SizedBox(
           width: double.infinity,
           height: 64,
           child: ElevatedButton.icon(
@@ -1566,11 +1607,13 @@ class _LoadExistingPledgeScreenState
             ),
           ),
         ),
+        ),
       ];
     }
 
     return [
-      SizedBox(
+      RestrictedAction(
+        child: SizedBox(
         width: double.infinity,
         height: 64,
         child: ElevatedButton.icon(
@@ -1589,8 +1632,10 @@ class _LoadExistingPledgeScreenState
           ),
         ),
       ),
+      ),
       const SizedBox(height: 12),
-      SizedBox(
+      RestrictedAction(
+        child: SizedBox(
         width: double.infinity,
         height: 64,
         child: OutlinedButton.icon(
@@ -1607,6 +1652,7 @@ class _LoadExistingPledgeScreenState
                 borderRadius: BorderRadius.circular(12)),
           ),
         ),
+      ),
       ),
     ];
   }
@@ -1719,21 +1765,29 @@ class _LoadExistingPledgeScreenState
     FocusNode? focusNode,
     TextInputAction? textInputAction,
     ValueChanged<String>? onSubmitted,
+    bool readOnly = false,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: TextField(
         controller: ctrl,
         focusNode: focusNode,
+        readOnly: readOnly,
         textInputAction: textInputAction,
         onSubmitted: onSubmitted,
         keyboardType:
             const TextInputType.numberWithOptions(decimal: true),
-        inputFormatters: [
-          FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
-        ],
+        inputFormatters: readOnly
+            ? []
+            : [FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))],
         style: const TextStyle(fontSize: 18),
-        decoration: InputDecoration(labelText: label),
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: readOnly
+              ? const Icon(Icons.lock_outline,
+                  size: 18, color: Colors.black38)
+              : null,
+        ),
       ),
     );
   }
@@ -1746,21 +1800,31 @@ class _LoadExistingPledgeScreenState
     FocusNode? focusNode,
     TextInputAction? textInputAction,
     ValueChanged<String>? onSubmitted,
+    bool readOnly = false,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: TextField(
         controller: ctrl,
         focusNode: focusNode,
+        readOnly: readOnly,
         textInputAction: textInputAction,
         onSubmitted: onSubmitted,
         keyboardType: TextInputType.number,
-        inputFormatters: indianFormat
-            ? [IndianNumberFormatter()]
-            : [FilteringTextInputFormatter.digitsOnly],
+        inputFormatters: readOnly
+            ? []
+            : (indianFormat
+                ? [IndianNumberFormatter()]
+                : [FilteringTextInputFormatter.digitsOnly]),
         style: const TextStyle(fontSize: 18),
-        decoration:
-            InputDecoration(labelText: label, prefixText: prefixText),
+        decoration: InputDecoration(
+          labelText: label,
+          prefixText: prefixText,
+          suffixIcon: readOnly
+              ? const Icon(Icons.lock_outline,
+                  size: 18, color: Colors.black38)
+              : null,
+        ),
       ),
     );
   }

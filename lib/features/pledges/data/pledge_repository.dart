@@ -885,6 +885,8 @@ class PledgeRepository {
             'amount': finalAmt,
             'cash_amount': finalCash,
             'bank_amount': finalUpi,
+            // Stamps the edit for the ledger's lock-time staleness check.
+            'updated_at': now,
           };
           if (hasExplicitSplit && newBankAccountId != null) {
             payUpdate['bank_account_id'] = newBankAccountId;

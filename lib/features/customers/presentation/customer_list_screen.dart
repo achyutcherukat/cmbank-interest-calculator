@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../data/customer_repository.dart';
 import 'add_edit_customer_screen.dart';
 import 'customer_detail_screen.dart';
@@ -123,20 +124,22 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => const AddEditCustomerScreen()),
-          );
-          _load();
-        },
-        backgroundColor: FlowColors.primary,
-        foregroundColor: FlowColors.textOnNavyLarge,
-        icon: const Icon(Icons.person_add),
-        label: const Text('ADD NEW CUSTOMER',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+      floatingActionButton: RestrictedAction(
+        child: FloatingActionButton.extended(
+          onPressed: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const AddEditCustomerScreen()),
+            );
+            _load();
+          },
+          backgroundColor: FlowColors.primary,
+          foregroundColor: FlowColors.textOnNavyLarge,
+          icon: const Icon(Icons.person_add),
+          label: const Text('ADD NEW CUSTOMER',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        ),
       ),
     );
   }

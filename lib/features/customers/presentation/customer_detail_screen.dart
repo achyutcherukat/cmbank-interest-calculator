@@ -8,10 +8,10 @@ import '../../../app/theme.dart';
 import '../../../features/admin/data/admin_repository.dart';
 import '../../../features/calculator/data/interest_calculator.dart';
 import '../../../features/pledges/data/pledge_model.dart';
-import '../../../features/pledges/presentation/closed_pledges_screen.dart';
 import '../../../features/pledges/presentation/open_pledge_screen.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/restorable_photo_thumb.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../../core/services/photo_sync_repository.dart';
 import '../data/customer_repository.dart';
 import 'add_edit_customer_screen.dart';
@@ -75,6 +75,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         fromDate: from,
         toDate: today,
         ratePercent: p.interestRate,
+        isRenewalPledge: p.renewalParentId != null,
       );
       return AgeingPledge(
         id: p.id ?? 0,
@@ -127,7 +128,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           ? SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: SizedBox(
+                child: RestrictedAction(
+                  child: SizedBox(
                   height: 54,
                   child: ElevatedButton.icon(
                     onPressed: () async {
@@ -151,6 +153,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         style: TextStyle(
                             fontSize: 17, fontWeight: FontWeight.bold)),
                   ),
+                ),
                 ),
               ),
             )

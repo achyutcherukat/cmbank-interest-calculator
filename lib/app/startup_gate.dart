@@ -6,11 +6,12 @@ import 'app_branding.dart';
 import '../core/database/app_database.dart';
 import '../core/services/crash_recovery.dart';
 import '../core/settings/app_settings_repository.dart';
+import '../core/settings/device_mode_service.dart';
 import '../features/admin/data/audit_log_repository.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/backup/presentation/database_error_screen.dart';
 import '../features/calculator/presentation/home_screen.dart';
-import '../features/setup/presentation/restore_or_setup_screen.dart';
+import '../features/setup/presentation/device_mode_selection_screen.dart';
 import 'theme.dart';
 
 /// Result of the launch-time checks.
@@ -124,7 +125,14 @@ class _StartupGateState extends State<StartupGate> with WidgetsBindingObserver {
       await AuditLogRepository.instance.purge(retention);
     } catch (_) {}
 
-    // 4. First-launch state.
+    // 4. Cache the device-mode flag used to gate write actions across the UI.
+    //    Runs on every app-root load — including the fresh StartupGate pushed
+    //    after a restore — so the flag is correct before any screen builds.
+    try {
+      await DeviceModeService.instance.refresh();
+    } catch (_) {}
+
+    // 5. First-launch state.
     bool setup;
     try {
       setup = await _settingsRepository.getBool('device_setup_complete');
@@ -158,6 +166,11 @@ class _StartupGateState extends State<StartupGate> with WidgetsBindingObserver {
   }
 
   void _handleSetupComplete() {
+    // Primary fresh-setup pushes the Restore-or-setup screen (which hosts the
+    // wizard) on top of this gate route; pop back to the gate so the HomeScreen
+    // rendered below becomes visible instead of staying under the wizard.
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.popUntil((route) => route.isFirst);
     setState(() {
       _startup = Future.value(_StartupState.ready);
       _isAuthenticated = true;
@@ -185,7 +198,8 @@ class _StartupGateState extends State<StartupGate> with WidgetsBindingObserver {
           case _StartupState.corrupt:
             return const DatabaseErrorScreen();
           case _StartupState.needsSetup:
-            return RestoreOrSetupScreen(onSetupComplete: _handleSetupComplete);
+            return DeviceModeSelectionScreen(
+                onSetupComplete: _handleSetupComplete);
           case _StartupState.ready:
             return _isAuthenticated
                 ? HomeScreen(onLock: _handleLock)

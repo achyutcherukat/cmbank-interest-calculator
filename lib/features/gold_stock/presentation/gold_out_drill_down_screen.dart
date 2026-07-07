@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../features/pledges/data/pledge_model.dart';
-import '../../../features/pledges/presentation/closed_pledges_screen.dart';
+import '../../../features/pledges/presentation/open_pledge_screen.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../data/gold_stock_repository.dart';
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/pledge_id_search_popup.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../pledges/presentation/load_existing_pledge_screen.dart';
 import '../../pledges/presentation/open_pledge_screen.dart';
 import '../data/calc_history_repository.dart';
@@ -373,7 +374,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               ),
               const SizedBox(height: 16),
               // Close Pledge button at the bottom after results
-              SizedBox(
+              RestrictedAction(
+                child: SizedBox(
                 width: double.infinity,
                 height: 58,
                 child: ElevatedButton.icon(
@@ -391,6 +393,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                         borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
+              ),
               ),
             ],
             const SizedBox(height: 30),

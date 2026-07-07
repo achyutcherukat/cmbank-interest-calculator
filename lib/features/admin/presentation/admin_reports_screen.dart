@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/report_period_selector.dart';
 import '../data/admin_repository.dart';
 
 class AdminReportsScreen extends StatefulWidget {
@@ -12,8 +13,8 @@ class AdminReportsScreen extends StatefulWidget {
 
 class _AdminReportsScreenState extends State<AdminReportsScreen>
     with WidgetsBindingObserver {
-  // Period selection
-  _Period _selected = _Period.q1;
+  // Period selection (shared ReportPeriod component)
+  ReportPeriod _selected = ReportPeriod.q1;
   DateTime? _customFrom;
   DateTime? _customTo;
 
@@ -46,55 +47,14 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   // ── Period helpers ────────────────────────────────────────────────────────────
 
-  static ({String from, String to}) _periodRange(_Period p, DateTime now,
-      {DateTime? customFrom, DateTime? customTo}) {
-    String fmt(DateTime d) =>
-        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
-    // Indian FY: April of fyStartYear to March of fyStartYear+1
-    final fyStartYear = now.month >= 4 ? now.year : now.year - 1;
-
-    switch (p) {
-      case _Period.q1: // Apr–Jun
-        return (
-          from: fmt(DateTime(fyStartYear, 4, 1)),
-          to: fmt(DateTime(fyStartYear, 6, 30)),
-        );
-      case _Period.q2: // Jul–Sep
-        return (
-          from: fmt(DateTime(fyStartYear, 7, 1)),
-          to: fmt(DateTime(fyStartYear, 9, 30)),
-        );
-      case _Period.q3: // Oct–Dec
-        return (
-          from: fmt(DateTime(fyStartYear, 10, 1)),
-          to: fmt(DateTime(fyStartYear, 12, 31)),
-        );
-      case _Period.q4: // Jan–Mar
-        return (
-          from: fmt(DateTime(fyStartYear + 1, 1, 1)),
-          to: fmt(DateTime(fyStartYear + 1, 3, 31)),
-        );
-      case _Period.yearly:
-        return (
-          from: fmt(DateTime(fyStartYear, 4, 1)),
-          to: fmt(DateTime(fyStartYear + 1, 3, 31)),
-        );
-      case _Period.custom:
-        final f = customFrom ?? DateTime(now.year, 4, 1);
-        final t = customTo ?? now;
-        return (from: fmt(f), to: fmt(t));
-    }
-  }
-
   Future<void> _load() async {
-    if (_selected == _Period.custom &&
+    if (_selected == ReportPeriod.custom &&
         (_customFrom == null || _customTo == null)) {
       return;
     }
     setState(() => _loading = true);
     try {
-      final range = _periodRange(_selected, DateTime.now(),
+      final range = reportPeriodRange(_selected, DateTime.now(),
           customFrom: _customFrom, customTo: _customTo);
       final data =
           await AdminRepository.instance.getReportData(range.from, range.to);
@@ -138,7 +98,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   String _periodLabel() {
     final now = DateTime.now();
-    final range = _periodRange(_selected, now,
+    final range = reportPeriodRange(_selected, now,
         customFrom: _customFrom, customTo: _customTo);
     return '${isoToDisplay(range.from)} – ${isoToDisplay(range.to)}';
   }
@@ -155,14 +115,25 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
       ),
       body: Column(
         children: [
-          _periodBar(),
+          ReportPeriodBar(
+            selected: _selected,
+            onSelect: (p) async {
+              if (p == ReportPeriod.custom) {
+                setState(() => _selected = ReportPeriod.custom);
+                await _pickCustomRange();
+              } else {
+                setState(() => _selected = p);
+                _load();
+              }
+            },
+          ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _data == null
                     ? Center(
                         child: Text(
-                          _selected == _Period.custom
+                          _selected == ReportPeriod.custom
                               ? 'Select a date range to view report'
                               : 'No data',
                           style: const TextStyle(
@@ -186,68 +157,6 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
                       ),
           ),
         ],
-      ),
-    );
-  }
-
-  // ── Period selector ───────────────────────────────────────────────────────────
-
-  Widget _periodBar() {
-    final periods = [
-      (_Period.q1, 'Q1'),
-      (_Period.q2, 'Q2'),
-      (_Period.q3, 'Q3'),
-      (_Period.q4, 'Q4'),
-      (_Period.yearly, 'Yearly'),
-      (_Period.custom, 'Custom'),
-    ];
-
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: periods.map((pair) {
-            final active = _selected == pair.$1;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: GestureDetector(
-                onTap: () async {
-                  if (pair.$1 == _Period.custom) {
-                    setState(() => _selected = _Period.custom);
-                    await _pickCustomRange();
-                  } else {
-                    setState(() => _selected = pair.$1);
-                    _load();
-                  }
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 10),
-                  decoration: BoxDecoration(
-                    color:
-                        active ? FlowColors.primary : FlowColors.bg,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                        color: active
-                            ? FlowColors.primary
-                            : FlowColors.primaryLight),
-                  ),
-                  child: Text(
-                    pair.$2,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: active ? Colors.white : FlowColors.primary,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
       ),
     );
   }
@@ -444,5 +353,3 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
     );
   }
 }
-
-enum _Period { q1, q2, q3, q4, yearly, custom }

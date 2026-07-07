@@ -234,7 +234,7 @@ class _DailyBankBreakdownScreenState
                   letterSpacing: 1.0)),
           const SizedBox(height: 8),
           Text(
-            money(total),
+            moneyWithPaise(total),
             style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.bold,
@@ -261,7 +261,7 @@ class _DailyBankBreakdownScreenState
                   fontWeight:
                       bold ? FontWeight.w700 : FontWeight.normal)),
           Text(
-            money(value),
+            moneyWithPaise(value),
             style: TextStyle(
                 fontSize: bold ? 17 : 14,
                 fontWeight:

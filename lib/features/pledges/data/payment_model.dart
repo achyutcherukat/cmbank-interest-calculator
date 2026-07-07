@@ -7,6 +7,7 @@ class PaymentModel {
     required this.paymentDate,
     required this.paymentType,
     this.subCategory,
+    this.ledgerAccountId,
     required this.direction,
     this.amount = 0.0,
     this.cashAmount = 0.0,
@@ -22,6 +23,9 @@ class PaymentModel {
   final String paymentDate; // DB: payment_date (ISO 8601 YYYY-MM-DD)
   final String paymentType; // DB: payment_type (see PaymentType)
   final String? subCategory; // DB: sub_category
+  final int? ledgerAccountId; // DB: ledger_account_id — sole
+  // chart_of_accounts reference for rows that need one (EXPENSE: the linked
+  // expense account; CAPITAL: the partner's capital account)
   final String direction; // DB: direction ('in' / 'out')
   final double amount;
   final double cashAmount; // DB: cash_amount
@@ -38,6 +42,7 @@ class PaymentModel {
       paymentDate: map['payment_date'] as String? ?? '',
       paymentType: map['payment_type'] as String? ?? '',
       subCategory: map['sub_category'] as String?,
+      ledgerAccountId: map['ledger_account_id'] as int?,
       direction: map['direction'] as String? ?? 'in',
       amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
       cashAmount: (map['cash_amount'] as num?)?.toDouble() ?? 0.0,
@@ -56,6 +61,7 @@ class PaymentModel {
       'payment_date': paymentDate,
       'payment_type': paymentType,
       'sub_category': subCategory,
+      'ledger_account_id': ledgerAccountId,
       'direction': direction,
       'amount': amount,
       'cash_amount': cashAmount,
@@ -80,6 +86,7 @@ class PaymentType {
   static const loanIncreaseDisbursed = 'LOAN_INCREASE_DISBURSED';
   static const expense = 'EXPENSE';
   static const adjustment = 'ADJUSTMENT';
+  static const capital = 'CAPITAL';
 }
 
 /// `direction` values.
@@ -114,4 +121,10 @@ class PaymentSubCategory {
   static const cashToBank = 'CASH_TO_BANK';
   static const bankToCash = 'BANK_TO_CASH';
   static const bankToBank = 'BANK_TO_BANK';
+
+  // CAPITAL (partner money movement; partner identity lives in
+  // ledger_account_id, never in this text)
+  static const capitalContribution = 'CAPITAL_CONTRIBUTION';
+  static const drawings = 'DRAWINGS';
+  static const tdsPayment = 'TDS_PAYMENT';
 }

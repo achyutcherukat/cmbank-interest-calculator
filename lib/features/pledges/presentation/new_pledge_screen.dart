@@ -3,13 +3,18 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 import '../../../app/theme.dart';
+import '../../../core/database/app_database.dart';
+import '../../../core/services/print_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
+import '../pledge_form_print_report.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/shared_customer_details_step.dart';
 import '../../../shared/widgets/shared_item_details_step.dart';
 import '../../../shared/widgets/shared_split_payment_widget.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../accounts/data/bank_account_model.dart';
 import '../../accounts/data/bank_account_repository.dart';
 import '../../customers/data/customer_repository.dart';
@@ -572,22 +577,49 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   // ─── Step 1: Gold & Loan Details ────────────────────────────────────────────
 
   Widget _buildStep1() {
+    final step1ReadOnly = widget.editMode &&
+        widget.existingPledge?.renewalParentId != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (step1ReadOnly)
+          Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 14),
+            decoration: BoxDecoration(
+              color: FlowColors.orangeLight,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: FlowColors.orange),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, color: FlowColors.orange, size: 18),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Step 1 details are read-only — this pledge was created from a renewal or loan increase and its details cannot be changed.',
+                    style: TextStyle(fontSize: 13, color: FlowColors.orange),
+                  ),
+                ),
+              ],
+            ),
+          ),
         if (widget.contextDate != null)
           ContextDateBanner(label: 'Pledge Date', date: widget.contextDate!),
         const _SectionHeader('Gold Details'),
         _decimalField('Gross Weight (grams)', _grossWeightCtrl,
+            readOnly: step1ReadOnly,
             textInputAction: TextInputAction.next,
             onSubmitted: (_) => _netFocus.requestFocus()),
         _decimalField('Net Weight (grams)', _netWeightCtrl,
             focusNode: _netFocus,
+            readOnly: step1ReadOnly,
             textInputAction: TextInputAction.next,
             onSubmitted: (_) => _loanAmtFocus.requestFocus()),
         _numberField('Pledge Rate (₹/gram)', _pledgeRateCtrl,
             suffixText: '/g',
             indianFormat: true,
+            readOnly: step1ReadOnly,
             textInputAction: TextInputAction.next,
             onSubmitted: (_) => FocusScope.of(context).nextFocus()),
         FlowCard(
@@ -616,38 +648,54 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
           padding: const EdgeInsets.only(bottom: 4),
           child: TextField(
             controller: _pledgeNoCtrl,
+            readOnly: step1ReadOnly,
             keyboardType: TextInputType.number,
             textInputAction: TextInputAction.next,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            inputFormatters: step1ReadOnly
+                ? []
+                : [FilteringTextInputFormatter.digitsOnly],
             style: const TextStyle(fontSize: 18),
             decoration: InputDecoration(
               labelText: 'Pledge Number',
-              prefixIcon: const Icon(Icons.tag),
+              prefixIcon: Icon(step1ReadOnly ? Icons.lock : Icons.tag),
               errorText: _pledgeNoError
                   ? 'This pledge number already exists'
                   : null,
             ),
-            onChanged: (_) => setState(() => _pledgeNoError = false),
-            onEditingComplete: _checkPledgeNo,
-            onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+            onChanged: step1ReadOnly
+                ? null
+                : (_) => setState(() => _pledgeNoError = false),
+            onEditingComplete: step1ReadOnly ? null : _checkPledgeNo,
+            onSubmitted: step1ReadOnly
+                ? null
+                : (_) => FocusScope.of(context).nextFocus(),
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.only(bottom: 16),
-          child: Text('Auto-filled. Edit if needed.',
-              style: TextStyle(color: Colors.black54, fontSize: 13)),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Text(
+            step1ReadOnly
+                ? 'Pledge number cannot be changed.'
+                : 'Auto-filled. Edit if needed.',
+            style: const TextStyle(color: Colors.black54, fontSize: 13),
+          ),
         ),
         const _SectionHeader('Loan Amount'),
         _numberField('Loan Amount (₹)', _loanAmtCtrl,
             focusNode: _loanAmtFocus,
             prefixText: '₹ ',
             indianFormat: true,
+            readOnly: step1ReadOnly,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => FocusScope.of(context).unfocus()),
         Padding(
           padding: const EdgeInsets.only(bottom: 24),
-          child: Text('Max: ${money(_maxPledgeValue)}. Can be lower.',
-              style: const TextStyle(color: Colors.black54, fontSize: 13)),
+          child: Text(
+            step1ReadOnly
+                ? 'Loan amount cannot be changed.'
+                : 'Max: ${money(_maxPledgeValue)}. Can be lower.',
+            style: const TextStyle(color: Colors.black54, fontSize: 13),
+          ),
         ),
         _proceedBtn(_proceedFromStep1),
       ],
@@ -815,22 +863,29 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
       children: [
         const _SectionHeader('Review & Confirm'),
 
-        // Gold & Loan
+        // Loan
         _summarySection(
-          title: 'GOLD & LOAN',
+          title: 'LOAN',
           onEdit: () => setState(() => _step = 1),
           children: [
             _summaryRow('Pledge No.', '#${_pledgeNoCtrl.text}',
                 highlight: true),
             _summaryRow('Date', displayDate),
+            _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
+          ],
+        ),
+
+        // Gold
+        _summarySection(
+          title: 'GOLD',
+          onEdit: () => setState(() => _step = 1),
+          children: [
             _summaryRow(
                 'Gross Weight', '${_grossWeight.toStringAsFixed(2)} g'),
             _summaryRow(
                 'Net Weight', '${_netWeight.toStringAsFixed(2)} g'),
             _summaryRow('Pledge Rate', '${money(_pledgeRate)}/g'),
-            _summaryRow('Max Pledge Value', money(_maxPledgeValue)),
             _summaryRow('Actual Item Value', money(_actualItemValue)),
-            _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
           ],
         ),
 
@@ -925,7 +980,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         ),
 
         const SizedBox(height: 24),
-        SizedBox(
+        RestrictedAction(
+          child: SizedBox(
           width: double.infinity,
           height: 64,
           child: ElevatedButton.icon(
@@ -949,6 +1005,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                   borderRadius: BorderRadius.circular(12)),
             ),
           ),
+        ),
         ),
         const SizedBox(height: 20),
       ],
@@ -1122,7 +1179,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         ),
 
         const SizedBox(height: 24),
-        SizedBox(
+        RestrictedAction(
+          child: SizedBox(
           width: double.infinity,
           height: 64,
           child: ElevatedButton.icon(
@@ -1146,6 +1204,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                   borderRadius: BorderRadius.circular(12)),
             ),
           ),
+        ),
         ),
         const SizedBox(height: 20),
       ],
@@ -1427,22 +1486,31 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     TextInputAction? textInputAction,
     ValueChanged<String>? onSubmitted,
     FocusNode? focusNode,
+    bool readOnly = false,
   }) {
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 10 : 14),
       child: TextField(
         controller: ctrl,
         focusNode: focusNode,
+        readOnly: readOnly,
         keyboardType:
             const TextInputType.numberWithOptions(decimal: true),
         textInputAction: textInputAction,
         onSubmitted: onSubmitted,
-        inputFormatters: [
-          FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
-        ],
+        inputFormatters: readOnly
+            ? []
+            : [FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))],
         style: TextStyle(fontSize: dense ? 16 : 18),
         onChanged: onChanged != null ? (_) => onChanged() : null,
-        decoration: InputDecoration(labelText: label, isDense: dense),
+        decoration: InputDecoration(
+          labelText: label,
+          isDense: dense,
+          suffixIcon: readOnly
+              ? const Icon(Icons.lock_outline,
+                  size: 18, color: Colors.black38)
+              : null,
+        ),
       ),
     );
   }
@@ -1457,24 +1525,32 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     TextInputAction? textInputAction,
     ValueChanged<String>? onSubmitted,
     FocusNode? focusNode,
+    bool readOnly = false,
   }) {
     return Padding(
       padding: EdgeInsets.only(bottom: dense ? 10 : 14),
       child: TextField(
         controller: ctrl,
         focusNode: focusNode,
+        readOnly: readOnly,
         keyboardType: TextInputType.number,
         textInputAction: textInputAction,
         onSubmitted: onSubmitted,
-        inputFormatters: indianFormat
-            ? [IndianNumberFormatter()]
-            : [FilteringTextInputFormatter.digitsOnly],
+        inputFormatters: readOnly
+            ? []
+            : (indianFormat
+                ? [IndianNumberFormatter()]
+                : [FilteringTextInputFormatter.digitsOnly]),
         style: TextStyle(fontSize: dense ? 16 : 18),
         decoration: InputDecoration(
           labelText: label,
           isDense: dense,
           prefixText: prefixText,
-          suffixText: suffixText,
+          suffixText: readOnly ? null : suffixText,
+          suffixIcon: readOnly
+              ? const Icon(Icons.lock_outline,
+                  size: 18, color: Colors.black38)
+              : null,
         ),
       ),
     );
@@ -1674,7 +1750,7 @@ class _SuccessScreen extends StatelessWidget {
               const SizedBox(height: 28),
               if (!isEdit) ...[
                 OutlinedButton.icon(
-                  onPressed: () {},
+                  onPressed: () => _printForm(context),
                   icon: const Icon(Icons.print, color: FlowColors.primary),
                   label: const Text('PRINT RECEIPT',
                       style: TextStyle(
@@ -1710,6 +1786,87 @@ class _SuccessScreen extends StatelessWidget {
     );
   }
 
+  // ─── Print the double-sided pledge form (Form E) ────────────────────────────
+
+  Future<void> _printForm(BuildContext context) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    try {
+      // Only pledgeNo is in scope here — resolve the pledge id.
+      final db = await AppDatabase.instance.database;
+      final rows = await db.query('pledges',
+          columns: ['id'],
+          where: 'pledge_no = ?',
+          whereArgs: [pledgeNo],
+          limit: 1);
+      if (rows.isEmpty) throw StateError('Pledge $pledgeNo not found.');
+      final pledgeId = rows.first['id'] as int;
+
+      final doc = await PledgeFormPrintReport.generate(pledgeId);
+      if (!context.mounted) return;
+      Navigator.pop(context); // dismiss loader
+      _showPrintSheet(context, doc);
+    } catch (e) {
+      if (!context.mounted) return;
+      Navigator.pop(context); // dismiss loader
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not generate pledge form: $e')),
+      );
+    }
+  }
+
+  void _showPrintSheet(BuildContext context, pw.Document doc) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 8),
+            Text('Pledge Form — #$pledgeNo',
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.primary)),
+            ListTile(
+              leading: const Icon(Icons.print, color: FlowColors.primary),
+              title: const Text('Print'),
+              onTap: () {
+                Navigator.pop(ctx);
+                PrintService.printDocument(
+                    pdf: doc, documentName: 'PledgeForm_$pledgeNo');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt, color: FlowColors.primary),
+              title: const Text('Save as PDF'),
+              onTap: () {
+                Navigator.pop(ctx);
+                PrintService.saveAsPdf(
+                    pdf: doc,
+                    fileName: 'PledgeForm_$pledgeNo.pdf',
+                    context: context);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Prominent navy card with gold values used on the success screens to make

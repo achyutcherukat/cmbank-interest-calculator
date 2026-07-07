@@ -1,15 +1,24 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:sqflite/sqflite.dart';
 
+import '../../../app/app_branding.dart';
 import '../../../core/database/app_database.dart';
+import '../../../core/database/chart_of_accounts_sync.dart';
+import '../../../core/database/data_fix_script.dart';
 import '../../../core/security/pin_hasher.dart';
 import '../../../core/services/backup_scheduler.dart';
 import '../../../core/services/backup_status_service.dart';
 import '../../../core/services/drive_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../backup/presentation/backup_actions.dart';
+import '../../ledger/presentation/add_ledger_account_screen.dart';
+import '../../ledger/presentation/opening_balance_wizard_screen.dart';
 import '../data/admin_repository.dart';
 import '../data/audit_log_repository.dart';
 import 'initial_setup_values_screen.dart';
@@ -64,6 +73,12 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
 
   // Audit log
   int _auditLogCount = 0;
+
+  // Data fix — highest fix version already applied on this install.
+  int _lastDataFixApplied = 0;
+
+  // Ledger opening balance — true once the one-time wizard has posted.
+  bool _ledgerOpeningPosted = false;
 
   bool _loading = true;
 
@@ -141,6 +156,13 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
 
       // Audit log count
       _auditLogCount = await AuditLogRepository.instance.getCount();
+
+      // Data fix — version already applied.
+      _lastDataFixApplied = int.tryParse(
+              await _settings.getString('last_data_fix_applied') ?? '0') ??
+          0;
+
+      _ledgerOpeningPosted = await _settings.getBool('ledger_opening_posted');
     } catch (_) {}
 
     if (mounted) setState(() => _loading = false);
@@ -235,16 +257,19 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 40),
               children: [
                 _sectionHeader('General', Icons.tune),
-                _interestRateTile(),
-                _changeCommonPinTile(),
-                _changeAdminPinTile(),
+                RestrictedAction(child: _interestRateTile()),
+                RestrictedAction(child: _changeCommonPinTile()),
+                RestrictedAction(child: _changeAdminPinTile()),
                 _biometricTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Masters', Icons.list_alt),
-                _mastersTile('Item Types', _itemTypes, true),
-                _mastersTile('Purity Types', _purityTypes, false),
-                _expenseCategoriesTile(),
-                _manageBankAccountsTile(),
+                RestrictedAction(
+                    child: _mastersTile('Item Types', _itemTypes, true)),
+                RestrictedAction(
+                    child: _mastersTile('Purity Types', _purityTypes, false)),
+                RestrictedAction(child: _expenseCategoriesTile()),
+                RestrictedAction(child: _manageBankAccountsTile()),
+                RestrictedAction(child: _ledgerAccountsTile()),
                 const SizedBox(height: 10),
                 _sectionHeader('Backup', Icons.backup),
                 _backupCard(),
@@ -253,7 +278,19 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                 _auditLogTile(),
                 const SizedBox(height: 10),
                 _sectionHeader('Setup Values', Icons.history_edu_outlined),
-                _setupValuesTile(),
+                RestrictedAction(child: _setupValuesTile()),
+                const SizedBox(height: 10),
+                _sectionHeader(
+                    'Opening Balance', Icons.account_balance_wallet_outlined),
+                RestrictedAction(child: _openingBalanceTile()),
+                // Data Fix — only on a flavour this fix targets, and only while
+                // an unapplied fix exists for this install.
+                if (dataFixFlavors.contains(AppBranding.flavor) &&
+                    dataFixVersion > _lastDataFixApplied) ...[
+                  const SizedBox(height: 10),
+                  _sectionHeader('Data Fix', Icons.healing),
+                  _dataFixCard(),
+                ],
                 const SizedBox(height: 10),
                 _sectionHeader('Info', Icons.info_outline),
                 _infoCard(),
@@ -547,6 +584,274 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     );
   }
 
+  // ── Data Fix ──────────────────────────────────────────────────────────────────
+
+  Widget _dataFixCard() {
+    return FlowCard(
+      borderColor: FlowColors.red,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.healing, color: FlowColors.red, size: 24),
+              const SizedBox(width: 10),
+              Text('Version $dataFixVersion',
+                  style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: FlowColors.primary)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(dataFixDescription,
+              style: const TextStyle(
+                  fontSize: 15, color: FlowColors.darkText)),
+          const SizedBox(height: 6),
+          const Text(
+            'A one-off correction that writes directly to the database. '
+            'Requires the admin PIN and runs in a single all-or-nothing '
+            'transaction.',
+            style: TextStyle(fontSize: 13, color: FlowColors.medText),
+          ),
+          const SizedBox(height: 14),
+          RestrictedAction(
+            child: SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: _busy ? null : _startDataFix,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: FlowColors.red,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                icon: const Icon(Icons.warning_amber_rounded),
+                label: const Text('RUN DATA FIX',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Step 1 — re-verify admin PIN, then show the SQL confirmation, then run.
+  Future<void> _startDataFix() async {
+    if (!await _promptAdminPin()) return;
+    if (!mounted) return;
+    final confirmed = await _showDataFixConfirm();
+    if (confirmed != true || !mounted) return;
+    await _runDataFix();
+  }
+
+  /// Re-prompts the admin PIN; returns true only on a correct entry. Mirrors the
+  /// hash-compare used by the Change Admin PIN dialog.
+  Future<bool> _promptAdminPin() async {
+    final ctrl = TextEditingController();
+    String? error;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx2, setDlg) => AlertDialog(
+          title: const Text('Admin PIN Required',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: FlowColors.primary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Re-enter your admin PIN to run this data fix.',
+                  style: TextStyle(fontSize: 15)),
+              const SizedBox(height: 12),
+              _pinField('Admin PIN', ctrl),
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(error!,
+                    style: const TextStyle(color: Colors.red, fontSize: 14)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx2, false),
+              child: const Text('Cancel',
+                  style: TextStyle(fontSize: 16, color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: FlowColors.primary),
+              onPressed: () async {
+                final storedHash =
+                    await _settings.getString('admin_pin_hash');
+                if (storedHash == null ||
+                    PinHasher.hash(ctrl.text.trim()) != storedHash) {
+                  setDlg(() => error = 'Incorrect admin PIN');
+                  return;
+                }
+                if (ctx2.mounted) Navigator.pop(ctx2, true);
+              },
+              child: const Text('Verify',
+                  style: TextStyle(
+                      fontSize: 16, color: FlowColors.textOnNavySmall)),
+            ),
+          ],
+        ),
+      ),
+    );
+    return ok ?? false;
+  }
+
+  /// Step 2 — shows the full SQL that will run; returns true on CONFIRM & RUN.
+  Future<bool?> _showDataFixConfirm() {
+    final sql = (dataFixStatements[AppBranding.flavor] ?? []).join('\n\n');
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Confirm Data Fix v$dataFixVersion',
+            style: const TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+                color: FlowColors.primary)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(dataFixDescription,
+                  style: const TextStyle(fontSize: 15)),
+              const SizedBox(height: 10),
+              const Text(
+                  'These statements run in a single transaction. Review them '
+                  'carefully — this cannot be undone:',
+                  style:
+                      TextStyle(fontSize: 13, color: FlowColors.medText)),
+              const SizedBox(height: 8),
+              Flexible(
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: FlowColors.primaryLight),
+                  ),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      sql,
+                      style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          height: 1.4),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('CANCEL',
+                style: TextStyle(fontSize: 16, color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: FlowColors.red,
+                foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('CONFIRM & RUN',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Step 3 — executes every statement plus the version bump and audit row in a
+  /// single atomic transaction. Any failure rolls the whole thing back and
+  /// leaves last_data_fix_applied unchanged.
+  Future<void> _runDataFix() async {
+    setState(() => _busy = true);
+    try {
+      final db = await AppDatabase.instance.database;
+      await db.transaction((txn) async {
+        for (final stmt in dataFixStatements[AppBranding.flavor] ?? []) {
+          await txn.execute(stmt);
+        }
+        // Mark this fix as applied — atomic with the statements above.
+        await txn.insert(
+          'settings',
+          {
+            'key': 'last_data_fix_applied',
+            'value': '$dataFixVersion',
+            'value_type': 'int',
+            'updated_by': null,
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        // Audit trail, in the same transaction.
+        await AuditLogRepository.instance.log(
+          actionCategory: AuditCategory.admin,
+          action: 'DATA_FIX_APPLIED',
+          entityType: 'settings',
+          newValueJson: jsonEncode({
+            'version': dataFixVersion,
+            'description': dataFixDescription,
+            'statements': dataFixStatements[AppBranding.flavor] ?? [],
+          }),
+          txn: txn,
+        );
+      });
+
+      if (!mounted) return;
+      // Section check now fails → it disappears on rebuild.
+      setState(() {
+        _lastDataFixApplied = dataFixVersion;
+        _busy = false;
+      });
+      await _showDataFixResult('Data fix applied successfully.', success: true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      await _showDataFixResult(
+        'Data fix failed and was rolled back. No changes were saved.\n\n$e',
+        success: false,
+      );
+    }
+  }
+
+  Future<void> _showDataFixResult(String message, {required bool success}) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(success ? 'Success' : 'Error',
+            style: TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+                color: success ? FlowColors.green : FlowColors.red)),
+        content: SingleChildScrollView(
+            child: Text(message, style: const TextStyle(fontSize: 15))),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: FlowColors.primary),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK',
+                style: TextStyle(color: FlowColors.textOnNavySmall)),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ── Masters ───────────────────────────────────────────────────────────────────
 
   Widget _mastersTile(String title, List<_MasterItem> items, bool isItem) {
@@ -832,17 +1137,79 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     );
   }
 
+  Widget _ledgerAccountsTile() {
+    return FlowCard(
+      padding: const EdgeInsets.all(0),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        leading: const Icon(Icons.menu_book,
+            color: FlowColors.primary, size: 26),
+        title: const Text('Ledger Accounts',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        subtitle: const Text('Manage the chart of accounts',
+            style: TextStyle(fontSize: 14, color: FlowColors.medText)),
+        trailing: const Icon(Icons.chevron_right),
+        minVerticalPadding: 16,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => const AddLedgerAccountScreen()),
+        ),
+      ),
+    );
+  }
+
+  Widget _openingBalanceTile() {
+    return FlowCard(
+      padding: const EdgeInsets.all(0),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        leading: Icon(
+            _ledgerOpeningPosted
+                ? Icons.check_circle_outline
+                : Icons.account_balance_wallet_outlined,
+            color:
+                _ledgerOpeningPosted ? FlowColors.green : FlowColors.primary,
+            size: 26),
+        title: const Text('Opening Balance Setup',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        subtitle: Text(
+            _ledgerOpeningPosted
+                ? 'Posted — view the opening entry'
+                : 'One-time: post the ledger\'s starting position',
+            style: const TextStyle(fontSize: 14, color: FlowColors.medText)),
+        trailing: const Icon(Icons.chevron_right),
+        minVerticalPadding: 16,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => const OpeningBalanceWizardScreen()),
+        ).then((_) => _load()),
+      ),
+    );
+  }
+
   Future<void> _toggleCategory(int id, bool active, int index) async {
     final db = await AppDatabase.instance.database;
-    await db.update(
-      'expense_categories',
-      {
-        'is_active': active ? 1 : 0,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'expense_categories',
+        {
+          'is_active': active ? 1 : 0,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await ChartOfAccountsSync.setLinkedActive(
+        txn,
+        ChartOfAccountsSync.linkedTableExpenseCategories,
+        id,
+        active: active,
+      );
+    });
     setState(() {
       _expenseCategories[index] = Map.from(_expenseCategories[index])
         ..['is_active'] = active ? 1 : 0;
@@ -879,11 +1246,24 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
               Navigator.pop(ctx);
               final db = await AppDatabase.instance.database;
               final now = DateTime.now().toIso8601String();
-              final id = await db.insert('expense_categories', {
-                'name': name,
-                'is_active': 1,
-                'created_at': now,
-                'updated_at': now,
+              // Category and its linked ledger account are created atomically.
+              late int id;
+              await db.transaction((txn) async {
+                id = await txn.insert('expense_categories', {
+                  'name': name,
+                  'is_active': 1,
+                  'created_at': now,
+                  'updated_at': now,
+                });
+                await ChartOfAccountsSync.insertAccount(
+                  txn,
+                  name: name,
+                  accountType: 'expense',
+                  linkedTable:
+                      ChartOfAccountsSync.linkedTableExpenseCategories,
+                  linkedId: id,
+                  isSystem: true,
+                );
               });
               setState(() {
                 _expenseCategories.add({
@@ -931,15 +1311,23 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
               if (name.isEmpty) return;
               Navigator.pop(ctx);
               final db = await AppDatabase.instance.database;
-              await db.update(
-                'expense_categories',
-                {
-                  'name': name,
-                  'updated_at': DateTime.now().toIso8601String(),
-                },
-                where: 'id = ?',
-                whereArgs: [id],
-              );
+              await db.transaction((txn) async {
+                await txn.update(
+                  'expense_categories',
+                  {
+                    'name': name,
+                    'updated_at': DateTime.now().toIso8601String(),
+                  },
+                  where: 'id = ?',
+                  whereArgs: [id],
+                );
+                await ChartOfAccountsSync.renameLinked(
+                  txn,
+                  ChartOfAccountsSync.linkedTableExpenseCategories,
+                  id,
+                  name,
+                );
+              });
               setState(() {
                 final idx = _expenseCategories
                     .indexWhere((e) => e['id'] == id);
@@ -1082,14 +1470,18 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
       header: 'ACTIONS',
       child: Column(
         children: [
-          _fullActionButton(
-            'BACKUP NOW',
-            Icons.backup,
-            filled: true,
-            onTap: () async {
-              await BackupActions.backupNow(context);
-              await _refreshBackupStatus();
-            },
+          // Secondary devices never create backups — only BACKUP NOW and
+          // BACKUP TO DEVICE are restricted; all RESTORE actions stay active.
+          RestrictedAction(
+            child: _fullActionButton(
+              'BACKUP NOW',
+              Icons.backup,
+              filled: true,
+              onTap: () async {
+                await BackupActions.backupNow(context);
+                await _refreshBackupStatus();
+              },
+            ),
           ),
           const SizedBox(height: 10),
           _fullActionButton(
@@ -1099,14 +1491,16 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
             onTap: () => BackupActions.restorePhotosNow(context),
           ),
           const SizedBox(height: 10),
-          _fullActionButton(
-            'BACKUP TO DEVICE',
-            Icons.sd_storage,
-            filled: true,
-            onTap: () async {
-              await BackupActions.backupToDevice(context);
-              await _refreshBackupStatus();
-            },
+          RestrictedAction(
+            child: _fullActionButton(
+              'BACKUP TO DEVICE',
+              Icons.sd_storage,
+              filled: true,
+              onTap: () async {
+                await BackupActions.backupToDevice(context);
+                await _refreshBackupStatus();
+              },
+            ),
           ),
           const SizedBox(height: 10),
           _fullActionButton(
@@ -1213,7 +1607,8 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
             ],
           ),
           const SizedBox(height: 14),
-          SizedBox(
+          RestrictedAction(
+            child: SizedBox(
             width: double.infinity,
             height: 50,
             child: ElevatedButton.icon(
@@ -1229,6 +1624,7 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                   style:
                       TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
+          ),
           ),
           const SizedBox(height: 10),
           const Text(

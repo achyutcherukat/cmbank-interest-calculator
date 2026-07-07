@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../ledger/presentation/ledger_home_screen.dart';
 import '../data/admin_repository.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_reports_screen.dart';
@@ -128,6 +129,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                 context,
                 MaterialPageRoute(
                     builder: (_) => const AdminReportsScreen()),
+              ).then((_) => _checkTimeout());
+            },
+          ),
+          const SizedBox(height: 14),
+          _navCard(
+            icon: Icons.menu_book,
+            label: 'Ledger',
+            subtitle: 'General ledger, trial balance, P&L & balance sheet',
+            color: FlowColors.primary,
+            onTap: () {
+              if (!_guard()) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const LedgerHomeScreen()),
               ).then((_) => _checkTimeout());
             },
           ),

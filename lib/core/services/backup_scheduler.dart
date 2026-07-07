@@ -11,7 +11,7 @@ const String kBackupUniqueName = 'cmb_scheduled_backup_periodic';
 
 /// Background entry point. Must be a top-level / static function annotated with
 /// `vm:entry-point` so it survives tree-shaking and can run in the background
-/// isolate.
+/// isolate. Runs the scheduled Drive backup (Primary devices only).
 @pragma('vm:entry-point')
 void backupCallbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
@@ -70,6 +70,16 @@ class BackupScheduler {
   static Future<void> reschedule() async {
     await init();
     final settings = AppSettingsRepository();
+
+    // Secondary devices never back up to Drive — make sure no periodic backup
+    // task is registered (e.g. if this device was previously a Primary).
+    // Secondary devices sync from Drive in the foreground (see home_screen).
+    final mode = (await settings.getString('device_mode'))?.trim().toLowerCase();
+    if (mode == 'secondary') {
+      await Workmanager().cancelByUniqueName(kBackupUniqueName);
+      return;
+    }
+
     final freqStr = await settings.getString('backup_frequency') ?? '30';
     final freq = int.tryParse(freqStr) ?? 30;
     final minutes = freq < 15 ? 15 : freq;

@@ -2,23 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../../core/services/ledger_posting_service.dart';
+import '../../../core/services/notification_service.dart';
+import '../../../core/services/print_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
+import '../cash_book_print_report.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../../shared/widgets/pledge_id_search_popup.dart';
+import '../../admin/data/admin_repository.dart';
 import '../../admin/data/audit_log_repository.dart';
+import '../../backup/presentation/backup_actions.dart';
 import '../../gold_stock/data/gold_stock_repository.dart';
+import '../../gold_stock/presentation/gold_stock_screen.dart';
+import '../../../core/services/non_business_day_service.dart';
 import '../../pledges/data/payment_model.dart';
 import '../../pledges/data/payments_repository.dart';
 import '../../pledges/data/pledge_model.dart';
 import '../../pledges/data/pledge_repository.dart';
-import '../../pledges/presentation/closed_pledges_screen.dart';
 import '../../pledges/presentation/load_existing_pledge_screen.dart';
 import '../../pledges/presentation/new_pledge_screen.dart';
 import '../../pledges/presentation/open_pledge_screen.dart';
 import '../../../shared/widgets/shared_split_payment_widget.dart';
 import '../data/bank_account_repository.dart';
 import 'adjust_balance_screen.dart';
+import 'edit_transaction_screen.dart';
+import 'partner_transaction_screen.dart';
 import '../data/daily_balance_repository.dart';
 import '../data/day_reconciliation_repository.dart';
 import 'daily_bank_breakdown_screen.dart';
@@ -51,6 +61,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
   List<Map<String, dynamic>> _inTxns = [];
   List<Map<String, dynamic>> _outTxns = [];
   Map<int, String> _bankAccountNames = {};
+  Map<int, String> _ledgerAccountNames = {};
 
   // Computed totals. Each row carries split cash/upi amounts; adjustments are
   // ordinary payment rows (direction in/out) and fold in here automatically.
@@ -143,6 +154,15 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
       for (final a in allAccounts) if (a.id != null) a.id!: a.name,
     };
 
+    // Chart-of-accounts names — CAPITAL rows carry only ledger_account_id,
+    // so partner names are resolved live (reflects renames).
+    final db = await AppDatabase.instance.database;
+    final chartRows =
+        await db.query('chart_of_accounts', columns: ['id', 'name']);
+    _ledgerAccountNames = {
+      for (final r in chartRows) r['id'] as int: r['name'] as String,
+    };
+
     final inMapped = inPayments
         .map((p) =>
             _mapPayment(p, p.pledgeId == null ? null : pledgeCache[p.pledgeId]))
@@ -167,6 +187,9 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
     if (_isToday && firstDate != null) {
       unlockedPrev = await DailyBalanceRepository.instance
           .getUnclosedDaysBefore(_iso(DateTime.now()), fromDate: firstDate);
+      // Sundays are auto-closed on demand — exclude them from the banner.
+      unlockedPrev =
+          unlockedPrev.where((d) => !NonBusinessDayService.isSunday(d)).toList();
     }
 
     if (mounted) {
@@ -194,6 +217,9 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
           : null,
       'payment_type': p.paymentType,
       'sub_category': p.subCategory,
+      'ledger_account_name': p.ledgerAccountId != null
+          ? _ledgerAccountNames[p.ledgerAccountId]
+          : null,
       'direction': p.direction,
       'notes': p.notes,
       'pledge_id': p.pledgeId,
@@ -208,6 +234,90 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
     _loadData();
   }
 
+  // ─── Print / Save PDF (locked days only) ────────────────────────────────────
+
+  void _showPrintSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 8),
+            Text('Cash Book — ${_fmt(_selectedDate)}',
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.primary)),
+            ListTile(
+              leading: const Icon(Icons.print, color: FlowColors.primary),
+              title: const Text('Print'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _runPrint(save: false);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt, color: FlowColors.primary),
+              title: const Text('Save as PDF'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _runPrint(save: true);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _runPrint({required bool save}) async {
+    final dateStr = _iso(_selectedDate);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    try {
+      final doc = await CashBookPrintReport.generate(dateStr);
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading
+      if (save) {
+        await PrintService.saveAsPdf(
+          pdf: doc,
+          fileName: 'CashBook_${_fileStamp(_selectedDate)}.pdf',
+          context: context,
+        );
+      } else {
+        await PrintService.printDocument(
+          pdf: doc,
+          documentName: 'Cash Book ${_fmt(_selectedDate)}',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not generate report: $e')),
+      );
+    }
+  }
+
+  String _fileStamp(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-${d.year}';
+
   // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
@@ -219,6 +329,14 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
         foregroundColor: FlowColors.goldRich,
         title: const Text('Cash Book'),
         actions: [
+          // Print / Save PDF — only for locked days (hidden otherwise to avoid
+          // confusion). Today before close and unlocked past days have no icon.
+          if (_isLocked)
+            IconButton(
+              icon: const Icon(Icons.print),
+              tooltip: 'Print / Save PDF',
+              onPressed: _showPrintSheet,
+            ),
           if (_isLocked)
             const Padding(
               padding: EdgeInsets.only(right: 14),
@@ -250,7 +368,8 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                           Row(
                             children: [
                               Expanded(
-                                child: SizedBox(
+                                child: RestrictedAction(
+                                  child: SizedBox(
                                   height: 54,
                                   child: ElevatedButton.icon(
                                     onPressed: () async {
@@ -277,10 +396,12 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                     ),
                                   ),
                                 ),
+                                ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
-                                child: SizedBox(
+                                child: RestrictedAction(
+                                  child: SizedBox(
                                   height: 54,
                                   child: ElevatedButton.icon(
                                     onPressed: _showAddExpense,
@@ -299,18 +420,74 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                     ),
                                   ),
                                 ),
+                                ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 10),
-                          _buildActionBtn(
-                            label: 'VERIFY & CLOSE DAY',
-                            icon: Icons.lock_outline,
-                            color: FlowColors.primary,
-                            foregroundColor: FlowColors.textOnNavyLarge,
-                            borderSide: const BorderSide(
-                                color: FlowColors.borderOnNavy, width: 0.8),
-                            onTap: _showReconcile,
+                          RestrictedAction(
+                            child: SizedBox(
+                              height: 54,
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => PartnerTransactionScreen(
+                                          date: _selectedDate),
+                                    ),
+                                  );
+                                  _loadData();
+                                },
+                                icon: const Icon(Icons.group, size: 18),
+                                label: const Text('PARTNER TRANSACTION',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: FlowColors.primaryLight,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(10)),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          RestrictedAction(
+                            child: SizedBox(
+                              height: 54,
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: _showEditTransaction,
+                                icon: const Icon(Icons.edit, size: 18),
+                                label: const Text('EDIT TRANSACTION',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: FlowColors.primaryLight,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(10)),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          RestrictedAction(
+                            child: _buildActionBtn(
+                              label: 'VERIFY & CLOSE DAY',
+                              icon: Icons.lock_outline,
+                              color: FlowColors.primary,
+                              foregroundColor: FlowColors.textOnNavyLarge,
+                              borderSide: const BorderSide(
+                                  color: FlowColors.borderOnNavy, width: 0.8),
+                              onTap: _showReconcile,
+                            ),
                           ),
                           // Backdated-entry actions: only on a past unlocked day.
                           if (!_isToday) ...[
@@ -318,7 +495,8 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                             Row(
                               children: [
                                 Expanded(
-                                  child: SizedBox(
+                                  child: RestrictedAction(
+                                    child: SizedBox(
                                     height: 54,
                                     child: OutlinedButton.icon(
                                       onPressed: _addOpenPledgeForDay,
@@ -341,10 +519,12 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                       ),
                                     ),
                                   ),
+                                  ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  child: SizedBox(
+                                  child: RestrictedAction(
+                                    child: SizedBox(
                                     height: 54,
                                     child: OutlinedButton.icon(
                                       onPressed: _recordClosureForDay,
@@ -366,16 +546,19 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                       ),
                                     ),
                                   ),
+                                  ),
                                 ),
                               ],
                             ),
                           ],
                         ] else
-                          _buildActionBtn(
-                            label: 'UNLOCK DAY (ADMIN)',
-                            icon: Icons.lock_open,
-                            color: FlowColors.red,
-                            onTap: _showUnlock,
+                          RestrictedAction(
+                            child: _buildActionBtn(
+                              label: 'UNLOCK DAY (ADMIN)',
+                              icon: Icons.lock_open,
+                              color: FlowColors.red,
+                              onTap: _showUnlock,
+                            ),
                           ),
                         const SizedBox(height: 24),
                       ],
@@ -587,7 +770,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            Text(money(cash + upi),
+            Text(moneyWithPaise(cash + upi),
                 style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
@@ -655,7 +838,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                         fontSize: 14,
                         color: FlowColors.textOnNavySmall,
                         fontWeight: FontWeight.w600)),
-                Text(money(_closingCash + _closingUpi),
+                Text(moneyWithPaise(_closingCash + _closingUpi),
                     style: const TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
@@ -679,7 +862,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
               style: const TextStyle(fontSize: 11, color: FlowColors.textOnNavySmall)),
         ]),
         const SizedBox(height: 4),
-        Text(money(amount),
+        Text(moneyWithPaise(amount),
             style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
@@ -729,7 +912,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                     fontSize: 11,
                     color: Colors.black54,
                     fontWeight: FontWeight.w600)),
-            Text(money(amount),
+            Text(moneyWithPaise(amount),
                 style: const TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
@@ -747,7 +930,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
         Text(label,
             style:
                 TextStyle(fontSize: 12, color: color.withAlpha(180))),
-        Text(money(amount),
+        Text(moneyWithPaise(amount),
             style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
@@ -762,11 +945,22 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
     final db = await AppDatabase.instance.database;
     final rows = await db.query(
       'expense_categories',
-      columns: ['name'],
+      columns: ['id', 'name'],
       where: 'is_active = 1',
       orderBy: 'name ASC',
     );
     final cats = rows.map((r) => r['name'] as String).toList();
+    final catIdByName = {
+      for (final r in rows) r['name'] as String: r['id'] as int,
+    };
+    // Ledger account linked to each category — written to
+    // payments.ledger_account_id, the posting engine's sole reference.
+    final chartRows = await db.query('chart_of_accounts',
+        columns: ['id', 'linked_id'],
+        where: "linked_table = 'expense_categories'");
+    final ledgerIdByCategoryId = {
+      for (final r in chartRows) r['linked_id'] as int: r['id'] as int,
+    };
     final accounts = await BankAccountRepository.instance.getActive();
 
     if (!mounted) return;
@@ -816,8 +1010,8 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                   const SizedBox(height: 20),
                   TextField(
                     controller: amountCtrl,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [IndianNumberFormatter()],
+                    keyboardType: TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [IndianDecimalFormatter()],
                     style: const TextStyle(
                         fontSize: 22, fontWeight: FontWeight.bold),
                     decoration: const InputDecoration(
@@ -888,7 +1082,7 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                           onPressed: saving
                               ? null
                               : () async {
-                                  final amt = int.tryParse(
+                                  final amt = double.tryParse(
                                       amountCtrl.text.replaceAll(',', '').trim());
                                   if (amt == null || amt <= 0) {
                                     setBS(() =>
@@ -920,6 +1114,8 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                                     bankAmt,
                                     catLabel,
                                     _iso(_selectedDate),
+                                    ledgerAccountId: ledgerIdByCategoryId[
+                                        catIdByName[catLabel]],
                                     bankAccountId: bankAccId,
                                     notes: notes.isEmpty ? null : notes,
                                   );
@@ -960,6 +1156,21 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
   }
 
 
+  // ─── Edit Transaction ─────────────────────────────────────────────────────
+
+  Future<void> _showEditTransaction() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditTransactionScreen(
+          dateStr: _iso(_selectedDate),
+          displayDate: _fmt(_selectedDate),
+        ),
+      ),
+    );
+    if (result == true && mounted) _loadData();
+  }
+
   // ─── Reconcile & Lock ─────────────────────────────────────────────────────
 
   void _showReconcile() {
@@ -974,13 +1185,13 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
 
     // No records exist at all → app's very first close. Nothing to enforce.
     if (_firstRecordDate == null) {
-      _navigateToReconcile();
+      await _checkStockThenReconcile();
       return;
     }
 
     // prevDate is before the first-ever record → locking the first day. Allow.
     if (prevIso.compareTo(_firstRecordDate!) < 0) {
-      _navigateToReconcile();
+      await _checkStockThenReconcile();
       return;
     }
 
@@ -990,12 +1201,102 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
 
     // Block when prevDate was never closed (null = no row) OR was admin-unlocked.
     if (prevRecord == null || !prevRecord.isLocked) {
+      final isClosed =
+          await NonBusinessDayService.autoCloseIfNonBusinessDay(prevIso);
+      if (!mounted) return;
+      if (isClosed) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              '${_fmt(prevDate)} (Sunday) auto-closed — shop is closed on Sundays.'),
+          duration: const Duration(seconds: 3),
+        ));
+        await _checkStockThenReconcile();
+        return;
+      }
       _showPrevDayBlockedDialog(prevDate, prevIso);
       return;
     }
 
     if (!mounted) return;
+    await _checkStockThenReconcile();
+  }
+
+  /// Guards day close behind gold stock verification. Blocks if the daily_stock
+  /// record is missing (never opened) or exists but not yet verified (is_locked=0).
+  Future<void> _checkStockThenReconcile() async {
+    final dateStr = _iso(_selectedDate);
+    final stockRecord = await GoldStockRepository.instance.getForDate(dateStr);
+    if (!mounted) return;
+    if (stockRecord == null || !stockRecord.isLocked) {
+      _showStockNotVerifiedDialog();
+      return;
+    }
     _navigateToReconcile();
+  }
+
+  void _showStockNotVerifiedDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Gold Stock Not Verified',
+            style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: FlowColors.orange)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'The gold stock register for ${_fmt(_selectedDate)} has not been '
+                'verified. Please complete the stock verification before closing the day.',
+                style: const TextStyle(fontSize: 14, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const GoldStockScreen()),
+                  ).then((_) => _loadData());
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: FlowColors.orangeLight,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: FlowColors.orange),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.inventory_2_outlined, color: FlowColors.orange, size: 18),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text('Go to Gold Stock Register',
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: FlowColors.darkText)),
+                      ),
+                      Icon(Icons.chevron_right, color: FlowColors.orange, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('DISMISS',
+                style: TextStyle(fontSize: 16, color: FlowColors.primary)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showPrevDayBlockedDialog(DateTime prevDate, String prevIso) {
@@ -1082,10 +1383,38 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
           onLocked: () {
             Navigator.pop(context);
             _loadData();
+            BackupActions.backupNow(context);
+            _fireDaySummaryNotification(
+              _selectedDate, _closingCash, _closingUpi);
           },
         ),
       ),
     );
+  }
+
+  /// Fires the local "Day Closed" summary notification. Reuses the same
+  /// AdminRepository query the Admin Dashboard's Today's Activity tiles use,
+  /// just for the date that was just locked. Best-effort only — a denied
+  /// notification permission or any error here must never surface to the
+  /// user or affect the (already-committed) day lock.
+  Future<void> _fireDaySummaryNotification(
+      DateTime businessDate, double closingCash, double closingUpi) async {
+    try {
+      final activity =
+          await AdminRepository.instance.getTodayActivity(date: businessDate);
+      final title = 'Day Closed — ${_fmt(businessDate)}';
+      final body = 'Cash closing balance: ${moneyWithPaise(closingCash)}\n'
+          'Bank (UPI) closing balance: ${moneyWithPaise(closingUpi)}\n'
+          'New loans today: ${activity.newCount} (${moneyWithPaise(activity.newAmount)})\n'
+          'Released today: ${activity.closedCount} (${moneyWithPaise(activity.closedAmount)})\n'
+          'Interest collected today: ${moneyWithPaise(activity.interestCollected)}';
+      await NotificationService.instance.showDaySummary(
+        title: title,
+        body: body,
+      );
+    } catch (_) {
+      // Notification is best-effort; the day is already locked.
+    }
   }
 
   // ─── Unlocked previous days (banner + dialog + navigation) ─────────────────
@@ -1440,12 +1769,21 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
   }
 
   String _group(Map<String, dynamic> t) {
-    final payType = t['payment_type'] as String? ?? '';
-    return payType == 'ADJUSTMENT' ? 'adjustment' : 'loan';
+    switch (t['payment_type'] as String? ?? '') {
+      case 'ADJUSTMENT':
+        return 'adjustment';
+      // Money IN only ever sees the CAPITAL_CONTRIBUTION sub-type ('in').
+      case 'CAPITAL':
+        return 'capital';
+      default:
+        return 'loan';
+    }
   }
 
   List<Map<String, dynamic>> get _adjustments =>
       _filtered.where((t) => _group(t) == 'adjustment').toList();
+  List<Map<String, dynamic>> get _capitalContributions =>
+      _filtered.where((t) => _group(t) == 'capital').toList();
   List<Map<String, dynamic>> get _loans =>
       _filtered.where((t) => _group(t) == 'loan').toList();
 
@@ -1484,6 +1822,10 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
                       if (_adjustments.isNotEmpty) ...[
                         _sectionLabel('Adjustments'),
                         ..._adjustments.map(_buildCard),
+                      ],
+                      if (_capitalContributions.isNotEmpty) ...[
+                        _sectionLabel('Capital Contributions'),
+                        ..._capitalContributions.map(_buildCard),
                       ],
                       if (_loans.isNotEmpty) ...[
                         _sectionLabel('Loans Closed'),
@@ -1524,11 +1866,11 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-          _filterChip('all', 'ALL', money(allTotal)),
+          _filterChip('all', 'ALL', moneyWithPaise(allTotal)),
           const SizedBox(width: 8),
-          _filterChip('cash', 'CASH', money(cashTotal)),
+          _filterChip('cash', 'CASH', moneyWithPaise(cashTotal)),
           const SizedBox(width: 8),
-          _filterChip('bank', 'BANK', money(upiTotal)),
+          _filterChip('bank', 'BANK', moneyWithPaise(upiTotal)),
         ],
       ),
     );
@@ -1592,7 +1934,7 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
     );
   }
 
-  String _moneyInLabel(String payType, String subCat) {
+  String _moneyInLabel(String payType, String subCat, String? ledgerName) {
     switch (payType) {
       case 'LOAN_FULL_CLOSURE':
         return 'Pledge Closed';
@@ -1602,6 +1944,10 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
         return subCat == 'FIXED_AMOUNT_INCLUSIVE'
             ? 'Part Payment — Fixed Amount'
             : 'Part Payment — Principal & Interest';
+      case 'CAPITAL':
+        return ledgerName != null
+            ? 'Capital Contribution — $ledgerName'
+            : 'Capital Contribution';
       case 'ADJUSTMENT':
         switch (subCat) {
           case 'ADD_CASH':     return 'Cash Added';
@@ -1624,7 +1970,8 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
     final pledgeId = t['pledge_id'] as int?;
     final payType = (t['payment_type'] as String?) ?? '';
     final subCat = (t['sub_category'] as String?) ?? '';
-    final typeLabel = _moneyInLabel(payType, subCat);
+    final typeLabel = _moneyInLabel(
+        payType, subCat, t['ledger_account_name'] as String?);
     final cash = (t['cash'] as num).toDouble();
     final upi = (t['upi'] as num).toDouble();
     final total = (t['amount'] as num).toDouble();
@@ -1633,6 +1980,7 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
     final customer = (t['customer_name'] as String?) ?? '';
     final notes = (t['notes'] as String?) ?? '';
     final isAdjustment = payType == 'ADJUSTMENT';
+    final isCapital = payType == 'CAPITAL';
     final isSplit = cash > 0 && upi > 0;
     final tappable = pledgeId != null && pledgeNo.isNotEmpty;
 
@@ -1674,16 +2022,16 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
                 Text(customer,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              if (!isAdjustment && typeLabel.isNotEmpty)
+              if (!isAdjustment && !isCapital && typeLabel.isNotEmpty)
                 Text(typeLabel,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              if (isAdjustment && notes.isNotEmpty)
+              if ((isAdjustment || isCapital) && notes.isNotEmpty)
                 Text(notes,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
               if (isSplit)
-                Text('Cash: ${money(cash)}   $bankLabel: ${money(upi)}',
+                Text('Cash: ${moneyWithPaise(cash)}   $bankLabel: ${moneyWithPaise(upi)}',
                     style: const TextStyle(
                         fontSize: 12, color: Colors.black45))
               else if (cash > 0)
@@ -1695,7 +2043,7 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
                         fontSize: 12, color: Colors.black45)),
             ],
           ),
-          trailing: Text(money(total),
+          trailing: Text(moneyWithPaise(total),
               style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -1740,6 +2088,9 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
         return 'expense';
       case 'ADJUSTMENT':
         return 'adjustment';
+      // Money OUT sees the DRAWINGS and TDS_PAYMENT sub-types ('out').
+      case 'CAPITAL':
+        return 'drawings';
       default:
         return 'loan';
     }
@@ -1749,6 +2100,8 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
       _filtered.where((t) => _group(t) == 'loan').toList();
   List<Map<String, dynamic>> get _expenses =>
       _filtered.where((t) => _group(t) == 'expense').toList();
+  List<Map<String, dynamic>> get _drawings =>
+      _filtered.where((t) => _group(t) == 'drawings').toList();
   List<Map<String, dynamic>> get _adjustments =>
       _filtered.where((t) => _group(t) == 'adjustment').toList();
 
@@ -1792,6 +2145,10 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
                         _sectionLabel('Expenses'),
                         ..._expenses.map(_buildCard),
                       ],
+                      if (_drawings.isNotEmpty) ...[
+                        _sectionLabel('Drawings / TDS'),
+                        ..._drawings.map(_buildCard),
+                      ],
                       if (_adjustments.isNotEmpty) ...[
                         _sectionLabel('Adjustments'),
                         ..._adjustments.map(_buildCard),
@@ -1816,11 +2173,11 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-          _filterChip('all', 'ALL', money(allTotal)),
+          _filterChip('all', 'ALL', moneyWithPaise(allTotal)),
           const SizedBox(width: 8),
-          _filterChip('cash', 'CASH', money(cashTotal)),
+          _filterChip('cash', 'CASH', moneyWithPaise(cashTotal)),
           const SizedBox(width: 8),
-          _filterChip('bank', 'BANK', money(upiTotal)),
+          _filterChip('bank', 'BANK', moneyWithPaise(upiTotal)),
         ],
       ),
     );
@@ -1896,7 +2253,7 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
     );
   }
 
-  String _moneyOutLabel(String payType, String subCat) {
+  String _moneyOutLabel(String payType, String subCat, String? ledgerName) {
     switch (payType) {
       case 'LOAN_DISBURSED':
         return 'New Pledge';
@@ -1906,6 +2263,9 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
             : 'Loan Top-Up — Interest Paid';
       case 'EXPENSE':
         return subCat.isNotEmpty ? subCat : 'Expense';
+      case 'CAPITAL':
+        final kind = subCat == 'TDS_PAYMENT' ? 'TDS Payment' : 'Drawings';
+        return ledgerName != null ? '$kind — $ledgerName' : kind;
       case 'ADJUSTMENT':
         switch (subCat) {
           case 'ADD_CASH':     return 'Cash Added';
@@ -1930,7 +2290,8 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
     final pledgeId = t['pledge_id'] as int?;
     final payType = (t['payment_type'] as String?) ?? '';
     final subCat = (t['sub_category'] as String?) ?? '';
-    final label = _moneyOutLabel(payType, subCat);
+    final label = _moneyOutLabel(
+        payType, subCat, t['ledger_account_name'] as String?);
     final cash = (t['cash'] as num).toDouble();
     final upi = (t['upi'] as num).toDouble();
     final amount = (t['amount'] as num).toDouble();
@@ -1940,6 +2301,7 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
     final notes = (t['notes'] as String?) ?? '';
     final isAdjustment = payType == 'ADJUSTMENT';
     final isExpense = payType == 'EXPENSE';
+    final isDrawings = payType == 'CAPITAL';
     final isSplit = cash > 0 && upi > 0;
     final tappable = isLoan && pledgeId != null && pledgeNo.isNotEmpty;
 
@@ -1987,20 +2349,17 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
                 Text(customer,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              if (!isExpense && !isAdjustment)
+              if (!isExpense && !isAdjustment && !isDrawings)
                 Text(label,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
-              if (isExpense && notes.isNotEmpty)
-                Text(notes,
-                    style: const TextStyle(
-                        fontSize: 13, color: Colors.black54)),
-              if (isAdjustment && notes.isNotEmpty)
+              if ((isExpense || isAdjustment || isDrawings) &&
+                  notes.isNotEmpty)
                 Text(notes,
                     style: const TextStyle(
                         fontSize: 13, color: Colors.black54)),
               if (isSplit)
-                Text('Cash: ${money(cash)}   $bankLabel: ${money(upi)}',
+                Text('Cash: ${moneyWithPaise(cash)}   $bankLabel: ${moneyWithPaise(upi)}',
                     style: const TextStyle(
                         fontSize: 12, color: Colors.black45))
               else if (cash > 0)
@@ -2012,7 +2371,7 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
                         fontSize: 12, color: Colors.black45)),
             ],
           ),
-          trailing: Text(money(amount),
+          trailing: Text(moneyWithPaise(amount),
               style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -2075,6 +2434,13 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _actualCashCtrl.text = widget.expectedCash.toStringAsFixed(2);
+    _actualUpiCtrl.text = widget.expectedUpi.toStringAsFixed(2);
+  }
+
+  @override
   void dispose() {
     _actualCashCtrl.dispose();
     _actualUpiCtrl.dispose();
@@ -2110,10 +2476,10 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
               children: [
                 DetailRow(
                     label: 'Cash',
-                    value: money(widget.expectedCash)),
+                    value: moneyWithPaise(widget.expectedCash)),
                 DetailRow(
                     label: 'Bank',
-                    value: money(widget.expectedUpi),
+                    value: moneyWithPaise(widget.expectedUpi),
                     isLast: true),
               ],
             ),
@@ -2216,7 +2582,7 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
     final prefix = diff > 0.5 ? '+' : '';
     return DetailRow(
       label: label,
-      value: '$prefix${money(diff)}',
+      value: '$prefix${moneyWithPaise(diff)}',
       valueColor: color,
       isLast: isLast,
     );
@@ -2233,8 +2599,26 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
     final remarks =
         _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim();
 
-    // Compute + store final totals from the ledger and lock the day.
-    await DailyBalanceRepository.instance.lockDay(widget.dateStr, null);
+    // Compute + store final totals from the ledger, post the day's journal
+    // entries and lock the day — atomically. On failure the day stays
+    // unlocked; the user fixes the underlying data and locks again.
+    try {
+      await DailyBalanceRepository.instance.lockDay(widget.dateStr, null);
+    } on LedgerPostingException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Day could not be closed: ${e.message}';
+        _locking = false;
+      });
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Failed to lock the day. Please try again.';
+        _locking = false;
+      });
+      return;
+    }
     await DayReconciliationRepository.instance.lockReconciliation(
       date: widget.dateStr,
       expectedCash: widget.expectedCash,

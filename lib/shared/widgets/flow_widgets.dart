@@ -379,6 +379,31 @@ String money(num value) {
   return '${isNegative ? '-' : ''}₹$intStr';
 }
 
+String moneyWithPaise(num value) {
+  final isNegative = value < 0;
+  final paise = (value.abs() * 100).round();
+  final whole = paise ~/ 100;
+  final frac = paise % 100;
+  final wholeStr = whole.toString();
+  String intStr;
+  if (wholeStr.length <= 3) {
+    intStr = wholeStr;
+  } else {
+    final last3 = wholeStr.substring(wholeStr.length - 3);
+    final rest = wholeStr.substring(0, wholeStr.length - 3);
+    final buf = StringBuffer();
+    final start = rest.length % 2;
+    if (start > 0) buf.write(rest.substring(0, start));
+    for (var i = start; i < rest.length; i += 2) {
+      if (buf.isNotEmpty) buf.write(',');
+      buf.write(rest.substring(i, i + 2));
+    }
+    intStr = '${buf.toString()},$last3';
+  }
+  final fracStr = frac == 0 ? '' : '.${frac.toString().padLeft(2, '0')}';
+  return '${isNegative ? '-' : ''}₹$intStr$fracStr';
+}
+
 // Converts ISO date string (YYYY-MM-DD) to display format (DD/MM/YYYY)
 String isoToDisplay(String? iso) {
   if (iso == null || iso.isEmpty) return '—';
@@ -428,6 +453,37 @@ class IndianNumberFormatter extends TextInputFormatter {
     TextEditingValue newValue,
   ) {
     final formatted = formatIndian(newValue.text);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
+class IndianDecimalFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final raw = newValue.text;
+    if (!RegExp(r'^[\d,\.]*$').hasMatch(raw)) return oldValue;
+    if ('.'.allMatches(raw.replaceAll(',', '')).length > 1) return oldValue;
+
+    final stripped = raw.replaceAll(',', '');
+    final dotIdx = stripped.indexOf('.');
+    String formatted;
+    if (dotIdx < 0) {
+      formatted = formatIndian(stripped.replaceAll(RegExp(r'[^\d]'), ''));
+    } else {
+      final intDigits =
+          stripped.substring(0, dotIdx).replaceAll(RegExp(r'[^\d]'), '');
+      final decDigits =
+          stripped.substring(dotIdx + 1).replaceAll(RegExp(r'[^\d]'), '');
+      final truncDec =
+          decDigits.length > 2 ? decDigits.substring(0, 2) : decDigits;
+      formatted = '${formatIndian(intDigits)}.$truncDec';
+    }
     return TextEditingValue(
       text: formatted,
       selection: TextSelection.collapsed(offset: formatted.length),

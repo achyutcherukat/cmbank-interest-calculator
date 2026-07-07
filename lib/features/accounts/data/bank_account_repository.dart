@@ -1,4 +1,5 @@
 import '../../../core/database/app_database.dart';
+import '../../../core/database/chart_of_accounts_sync.dart';
 import '../../pledges/data/payment_model.dart';
 import '../../pledges/data/payments_repository.dart';
 import 'bank_account_model.dart';
@@ -56,27 +57,41 @@ class BankAccountRepository {
   }) async {
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toIso8601String();
-    final id = await db.insert('bank_accounts', {
-      'name': name,
-      'opening_balance': openingBalance,
-      'start_date': startDate,
-      'is_default': 0,
-      'is_active': 1,
-      'created_at': now,
-      'updated_at': now,
-    });
-    if (openingBalance > 0 && createOpeningPayment) {
-      await PaymentsRepository.instance.createAdjustment(
-        openingBalance,
-        0,
-        openingBalance,
-        PaymentSubCategory.addBank,
-        PaymentDirection.inward,
-        startDate,
-        bankAccountId: id,
-        notes: 'Opening balance',
+    // Bank account, its linked ledger account and the opening-balance
+    // payment are created atomically.
+    late int id;
+    await db.transaction((txn) async {
+      id = await txn.insert('bank_accounts', {
+        'name': name,
+        'opening_balance': openingBalance,
+        'start_date': startDate,
+        'is_default': 0,
+        'is_active': 1,
+        'created_at': now,
+        'updated_at': now,
+      });
+      await ChartOfAccountsSync.insertAccount(
+        txn,
+        name: name,
+        accountType: 'asset',
+        linkedTable: ChartOfAccountsSync.linkedTableBankAccounts,
+        linkedId: id,
+        isSystem: true,
       );
-    }
+      if (openingBalance > 0 && createOpeningPayment) {
+        await PaymentsRepository.instance.createAdjustment(
+          openingBalance,
+          0,
+          openingBalance,
+          PaymentSubCategory.addBank,
+          PaymentDirection.inward,
+          startDate,
+          bankAccountId: id,
+          notes: 'Opening balance',
+          txn: txn,
+        );
+      }
+    });
 
     return BankAccount(
       id: id,
@@ -92,12 +107,20 @@ class BankAccountRepository {
 
   Future<void> rename(int id, String newName) async {
     final db = await AppDatabase.instance.database;
-    await db.update(
-      'bank_accounts',
-      {'name': newName, 'updated_at': DateTime.now().toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'bank_accounts',
+        {'name': newName, 'updated_at': DateTime.now().toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await ChartOfAccountsSync.renameLinked(
+        txn,
+        ChartOfAccountsSync.linkedTableBankAccounts,
+        id,
+        newName,
+      );
+    });
   }
 
   /// Sets [id] as the sole default account in a single transaction.
@@ -120,11 +143,19 @@ class BankAccountRepository {
 
   Future<void> setActive(int id, {required bool active}) async {
     final db = await AppDatabase.instance.database;
-    await db.update(
-      'bank_accounts',
-      {'is_active': active ? 1 : 0, 'updated_at': DateTime.now().toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'bank_accounts',
+        {'is_active': active ? 1 : 0, 'updated_at': DateTime.now().toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await ChartOfAccountsSync.setLinkedActive(
+        txn,
+        ChartOfAccountsSync.linkedTableBankAccounts,
+        id,
+        active: active,
+      );
+    });
   }
 }

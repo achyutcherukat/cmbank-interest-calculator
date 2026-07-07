@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../../features/customers/presentation/customer_detail_screen.dart';
-import '../../../features/pledges/presentation/closed_pledges_screen.dart';
 import '../../../features/pledges/presentation/open_pledge_screen.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../data/admin_repository.dart';

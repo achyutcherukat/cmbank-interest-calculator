@@ -1,16 +1,36 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/database/app_database.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../accounts/data/bank_account_model.dart';
 import '../../accounts/data/bank_account_repository.dart';
+import '../../accounts/data/daily_balance_repository.dart';
 import '../../admin/data/audit_log_repository.dart';
 import '../../pledges/data/payment_model.dart';
 import '../../pledges/data/payments_repository.dart';
 
 class AdjustBalanceScreen extends StatefulWidget {
   final DateTime date;
-  const AdjustBalanceScreen({super.key, required this.date});
+
+  /// When non-null, the screen operates in edit mode: form is pre-populated
+  /// from [editPayment] and Save updates the existing row(s) rather than
+  /// inserting new ones.
+  ///
+  /// For two-row transfer adjustments (CASH_TO_BANK, BANK_TO_CASH,
+  /// BANK_TO_BANK), also pass [editPartnerPayment] — the IN-direction row that
+  /// forms the pair with [editPayment] (the OUT-direction row).
+  final PaymentModel? editPayment;
+  final PaymentModel? editPartnerPayment;
+
+  const AdjustBalanceScreen({
+    super.key,
+    required this.date,
+    this.editPayment,
+    this.editPartnerPayment,
+  });
 
   @override
   State<AdjustBalanceScreen> createState() => _AdjustBalanceScreenState();
@@ -20,7 +40,10 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
   List<BankAccount> _bankAccounts = [];
   bool _loading = true;
 
-  String _mode = 'add_cash';
+  // ADD_CASH / ADD_UPI-style "add money in" adjustments are retired — new
+  // adjustments are transfers only. 'add_cash' / 'add_bank' remain reachable
+  // in edit mode for historical rows.
+  String _mode = 'transfer';
   int? _selectedBankAccountId;
   String _fromId = 'cash';
   String? _toId;
@@ -29,6 +52,14 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
   final _reasonCtrl = TextEditingController();
   String? _error;
   bool _saving = false;
+
+  bool get _isEditMode => widget.editPayment != null;
+
+  String get _dateStr {
+    final d = widget.date;
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+  }
 
   @override
   void initState() {
@@ -46,14 +77,76 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
   Future<void> _loadAccounts() async {
     final accounts = await BankAccountRepository.instance.getActive();
     if (!mounted) return;
+
+    String initialMode = 'transfer';
+    int? initialBankAccountId;
+    String initialFromId = _cashId;
+    String? initialToId;
+
+    if (_isEditMode) {
+      final sub = widget.editPayment!.subCategory ?? '';
+      final amt = widget.editPayment!.amount;
+      final amtPaise = (amt.abs() * 100).round() % 100;
+      _amountCtrl.text = amtPaise == 0
+          ? formatIndian(amt.round().toString())
+          : '${formatIndian(amt.floor().toString())}.${amtPaise.toString().padLeft(2, '0')}';
+      _reasonCtrl.text = widget.editPayment!.notes ?? '';
+
+      if (sub == PaymentSubCategory.addCash) {
+        initialMode = 'add_cash';
+      } else if (sub == PaymentSubCategory.addBank ||
+          sub == PaymentSubCategory.addUpi) {
+        initialMode = 'add_bank';
+        initialBankAccountId = widget.editPayment!.bankAccountId;
+        if (initialBankAccountId == null && accounts.isNotEmpty) {
+          final def = accounts.cast<BankAccount?>().firstWhere(
+              (a) => a?.isDefault == true,
+              orElse: () => null);
+          initialBankAccountId = (def ?? accounts.first).id;
+        }
+      } else {
+        // Transfer types
+        initialMode = 'transfer';
+        final isCashToBank = sub == PaymentSubCategory.cashToBank ||
+            sub == PaymentSubCategory.cashToUpi;
+        final isBankToCash = sub == PaymentSubCategory.bankToCash ||
+            sub == PaymentSubCategory.upiToCash;
+
+        if (isCashToBank) {
+          initialFromId = _cashId;
+          final toAcctId = widget.editPartnerPayment?.bankAccountId;
+          initialToId = toAcctId?.toString() ??
+              (accounts.isNotEmpty ? accounts.first.id.toString() : null);
+        } else if (isBankToCash) {
+          initialFromId =
+              widget.editPayment!.bankAccountId?.toString() ?? _cashId;
+          initialToId = _cashId;
+        } else {
+          // BANK_TO_BANK
+          initialFromId =
+              widget.editPayment!.bankAccountId?.toString() ?? _cashId;
+          final toAcctId = widget.editPartnerPayment?.bankAccountId;
+          initialToId = toAcctId?.toString() ??
+              (accounts.length > 1 ? accounts[1].id.toString() : null);
+        }
+      }
+    } else {
+      // Create mode: pick default bank account
+      if (accounts.isNotEmpty) {
+        final def = accounts.cast<BankAccount?>().firstWhere(
+            (a) => a?.isDefault == true,
+            orElse: () => null);
+        initialBankAccountId = (def ?? accounts.first).id;
+      }
+    }
+
     setState(() {
       _bankAccounts = accounts;
       _loading = false;
-      if (accounts.isNotEmpty) {
-        final def = accounts.cast<BankAccount?>()
-            .firstWhere((a) => a?.isDefault == true, orElse: () => null);
-        _selectedBankAccountId = (def ?? accounts.first).id;
-      }
+      _mode = initialMode;
+      _selectedBankAccountId = initialBankAccountId ?? _selectedBankAccountId;
+      _fromId = initialFromId;
+      _toId = initialToId;
     });
   }
 
@@ -99,6 +192,36 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
     );
   }
 
+  Widget _editModeChip() {
+    final modeLabel = switch (_mode) {
+      'add_cash' => 'Add Cash',
+      'add_bank' => 'Add Bank Amount',
+      _ => 'Transfer Money',
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: CMBColors.warmWhite,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: CMBColors.borderOnLight, width: 1.5),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.edit, size: 18, color: CMBColors.navy),
+          const SizedBox(width: 10),
+          Text(
+            'Editing: $modeLabel',
+            style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: CMBColors.navy),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─── Transfer item type ─────────────────────────────────────────────────────
 
   static const String _cashId = 'cash';
@@ -126,8 +249,7 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
             child: Row(children: [
               const Icon(Icons.account_balance, size: 18, color: CMBColors.navy),
               const SizedBox(width: 8),
-              Text(a.name +
-                  (a.isDefault ? '  ★' : '')),
+              Text(a.name + (a.isDefault ? '  ★' : '')),
             ]),
           )),
     ];
@@ -217,8 +339,8 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
 
   Widget _amountField() => TextField(
         controller: _amountCtrl,
-        keyboardType: TextInputType.number,
-        inputFormatters: [IndianNumberFormatter()],
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [IndianDecimalFormatter()],
         decoration: const InputDecoration(
             labelText: 'Amount (₹) *', prefixText: '₹ '),
         onChanged: (_) {
@@ -269,62 +391,12 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
 
     setState(() => _saving = true);
 
-    final d = widget.date;
-    final dateStr =
-        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-    final repo = PaymentsRepository.instance;
-
     try {
-      if (_mode == 'add_cash') {
-        await repo.createAdjustment(amt, amt, 0,
-            PaymentSubCategory.addCash, PaymentDirection.inward, dateStr,
-            notes: reason);
-      } else if (_mode == 'add_bank') {
-        await repo.createAdjustment(amt, 0, amt,
-            PaymentSubCategory.addBank, PaymentDirection.inward, dateStr,
-            bankAccountId: _selectedBankAccountId, notes: reason);
+      if (_isEditMode) {
+        await _applyEdit(amt, reason);
       } else {
-        final fromIsCash = _fromId == _cashId;
-        final toIsCash = _toId == _cashId;
-        final fromAcctId = fromIsCash ? null : int.tryParse(_fromId);
-        final toAcctId = toIsCash ? null : int.tryParse(_toId!);
-
-        if (fromIsCash && !toIsCash) {
-          // Cash → Bank
-          await repo.createAdjustment(amt, amt, 0,
-              PaymentSubCategory.cashToBank, PaymentDirection.outward,
-              dateStr, notes: reason);
-          await repo.createAdjustment(amt, 0, amt,
-              PaymentSubCategory.cashToBank, PaymentDirection.inward,
-              dateStr, bankAccountId: toAcctId, notes: reason);
-        } else if (!fromIsCash && toIsCash) {
-          // Bank → Cash
-          await repo.createAdjustment(amt, 0, amt,
-              PaymentSubCategory.bankToCash, PaymentDirection.outward,
-              dateStr, bankAccountId: fromAcctId, notes: reason);
-          await repo.createAdjustment(amt, amt, 0,
-              PaymentSubCategory.bankToCash, PaymentDirection.inward,
-              dateStr, notes: reason);
-        } else {
-          // Bank → Bank
-          await repo.createAdjustment(amt, 0, amt,
-              PaymentSubCategory.bankToBank, PaymentDirection.outward,
-              dateStr, bankAccountId: fromAcctId, notes: reason);
-          await repo.createAdjustment(amt, 0, amt,
-              PaymentSubCategory.bankToBank, PaymentDirection.inward,
-              dateStr, bankAccountId: toAcctId, notes: reason);
-        }
+        await _applyCreate(amt, reason);
       }
-
-      await AuditLogRepository.instance.log(
-        actionCategory: AuditCategory.dayManagement,
-        action: 'BALANCE_ADJUSTED',
-        entityType: 'payments',
-        entityId: dateStr,
-        newValueJson: '{"type":"$_mode","amount":$amt}',
-        reason: reason,
-      );
-
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
@@ -334,6 +406,157 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
         _saving = false;
       });
     }
+  }
+
+  /// Create mode records transfers only — the retired ADD_CASH / ADD_UPI /
+  /// ADD_BANK "add money in" adjustments can no longer be created here.
+  Future<void> _applyCreate(double amt, String reason) async {
+    final repo = PaymentsRepository.instance;
+
+    final fromIsCash = _fromId == _cashId;
+    final toIsCash = _toId == _cashId;
+    final fromAcctId = fromIsCash ? null : int.tryParse(_fromId);
+    final toAcctId = toIsCash ? null : int.tryParse(_toId!);
+
+    if (fromIsCash && !toIsCash) {
+      await repo.createAdjustment(amt, amt, 0,
+          PaymentSubCategory.cashToBank, PaymentDirection.outward,
+          _dateStr, notes: reason);
+      await repo.createAdjustment(amt, 0, amt,
+          PaymentSubCategory.cashToBank, PaymentDirection.inward,
+          _dateStr, bankAccountId: toAcctId, notes: reason);
+    } else if (!fromIsCash && toIsCash) {
+      await repo.createAdjustment(amt, 0, amt,
+          PaymentSubCategory.bankToCash, PaymentDirection.outward,
+          _dateStr, bankAccountId: fromAcctId, notes: reason);
+      await repo.createAdjustment(amt, amt, 0,
+          PaymentSubCategory.bankToCash, PaymentDirection.inward,
+          _dateStr, notes: reason);
+    } else {
+      await repo.createAdjustment(amt, 0, amt,
+          PaymentSubCategory.bankToBank, PaymentDirection.outward,
+          _dateStr, bankAccountId: fromAcctId, notes: reason);
+      await repo.createAdjustment(amt, 0, amt,
+          PaymentSubCategory.bankToBank, PaymentDirection.inward,
+          _dateStr, bankAccountId: toAcctId, notes: reason);
+    }
+
+    await AuditLogRepository.instance.log(
+      actionCategory: AuditCategory.dayManagement,
+      action: 'BALANCE_ADJUSTED',
+      entityType: 'payments',
+      entityId: _dateStr,
+      newValueJson: '{"type":"$_mode","amount":$amt}',
+      reason: reason,
+    );
+  }
+
+  Future<void> _applyEdit(double amt, String reason) async {
+    final isLocked =
+        await DailyBalanceRepository.instance.isDateLocked(_dateStr);
+    if (isLocked) throw Exception('Day is locked');
+
+    final payId = widget.editPayment!.id!;
+    final oldAmt = widget.editPayment!.amount;
+    final repo = PaymentsRepository.instance;
+
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      if (_mode == 'add_cash') {
+        await repo.updatePaymentFields(txn, payId,
+            amount: amt,
+            cashAmount: amt,
+            bankAmount: 0,
+            clearBankAccountId: true,
+            notes: reason);
+      } else if (_mode == 'add_bank') {
+        await repo.updatePaymentFields(txn, payId,
+            amount: amt,
+            cashAmount: 0,
+            bankAmount: amt,
+            bankAccountId: _selectedBankAccountId,
+            notes: reason);
+      } else {
+        // Transfer: update both rows and keep sub_category in sync with
+        // the current from/to selection.
+        final partnerId = widget.editPartnerPayment!.id!;
+        final fromIsCash = _fromId == _cashId;
+        final toIsCash = _toId == _cashId;
+        final fromAcctId = fromIsCash ? null : int.tryParse(_fromId);
+        final toAcctId = toIsCash ? null : int.tryParse(_toId ?? '');
+
+        final String newSub;
+        if (fromIsCash && !toIsCash) {
+          newSub = PaymentSubCategory.cashToBank;
+          // OUT row: cash out
+          await repo.updatePaymentFields(txn, payId,
+              amount: amt,
+              cashAmount: amt,
+              bankAmount: 0,
+              clearBankAccountId: true,
+              notes: reason,
+              subCategory: newSub);
+          // IN row: bank in
+          await repo.updatePaymentFields(txn, partnerId,
+              amount: amt,
+              cashAmount: 0,
+              bankAmount: amt,
+              bankAccountId: toAcctId,
+              notes: reason,
+              subCategory: newSub);
+        } else if (!fromIsCash && toIsCash) {
+          newSub = PaymentSubCategory.bankToCash;
+          // OUT row: bank out
+          await repo.updatePaymentFields(txn, payId,
+              amount: amt,
+              cashAmount: 0,
+              bankAmount: amt,
+              bankAccountId: fromAcctId,
+              notes: reason,
+              subCategory: newSub);
+          // IN row: cash in
+          await repo.updatePaymentFields(txn, partnerId,
+              amount: amt,
+              cashAmount: amt,
+              bankAmount: 0,
+              clearBankAccountId: true,
+              notes: reason,
+              subCategory: newSub);
+        } else {
+          newSub = PaymentSubCategory.bankToBank;
+          // OUT row
+          await repo.updatePaymentFields(txn, payId,
+              amount: amt,
+              cashAmount: 0,
+              bankAmount: amt,
+              bankAccountId: fromAcctId,
+              notes: reason,
+              subCategory: newSub);
+          // IN row
+          await repo.updatePaymentFields(txn, partnerId,
+              amount: amt,
+              cashAmount: 0,
+              bankAmount: amt,
+              bankAccountId: toAcctId,
+              notes: reason,
+              subCategory: newSub);
+        }
+      }
+
+      await AuditLogRepository.instance.log(
+        actionCategory: AuditCategory.dayManagement,
+        action: 'TRANSACTION_EDITED',
+        entityType: 'payments',
+        entityId: payId.toString(),
+        oldValueJson: jsonEncode({'amount': oldAmt, 'type': _mode}),
+        newValueJson:
+            jsonEncode({'amount': amt, 'type': _mode, 'reason': reason}),
+        reason: reason,
+        txn: txn,
+      );
+    });
+
+    await DailyBalanceRepository.instance.cascadeFrom(_dateStr);
   }
 
   // ─── Build ──────────────────────────────────────────────────────────────────
@@ -346,8 +569,8 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Adjust Balance',
-                style: TextStyle(
+            Text(_isEditMode ? 'Edit Adjustment' : 'Adjust Balance',
+                style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: CMBColors.textOnNavyLarge)),
@@ -368,13 +591,13 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Mode selector ──────────────────────────────────────────
-                  _modeTile('add_cash', 'Add Cash Amount', Icons.payments),
-                  const SizedBox(height: 10),
-                  _modeTile('add_bank', 'Add Money to Bank Account',
-                      Icons.account_balance),
-                  const SizedBox(height: 10),
-                  _modeTile('transfer', 'Transfer Money', Icons.swap_horiz),
+                  // ── Mode selector (create) or read-only chip (edit) ────────
+                  // Only transfers can be created; "add money in" is handled
+                  // via Capital Contribution (separate feature), not here.
+                  if (!_isEditMode)
+                    _modeTile('transfer', 'Transfer Money', Icons.swap_horiz)
+                  else
+                    _editModeChip(),
                   const SizedBox(height: 24),
 
                   // ── Form ──────────────────────────────────────────────────
@@ -414,7 +637,9 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
                               child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                   color: CMBColors.goldRich))
-                          : const Text('APPLY ADJUSTMENT'),
+                          : Text(_isEditMode
+                              ? 'SAVE CHANGES'
+                              : 'APPLY ADJUSTMENT'),
                     ),
                   ),
                 ],

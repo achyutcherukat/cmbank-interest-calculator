@@ -308,6 +308,49 @@ class AdminRepository {
     return DateTime.parse(raw);
   }
 
+  // ── Month Activity ─────────────────────────────────────────────────────────────
+
+  Future<TodayActivity> getMonthActivity(DateTime month) async {
+    final db = await AppDatabase.instance.database;
+    final from = DateTime(month.year, month.month, 1)
+        .toIso8601String()
+        .substring(0, 10);
+    final to = DateTime(month.year, month.month + 1, 1)
+        .subtract(const Duration(days: 1))
+        .toIso8601String()
+        .substring(0, 10);
+
+    final results = await Future.wait([
+      db.rawQuery(
+          "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
+          "FROM pledges WHERE DATE(start_date) BETWEEN ? AND ?",
+          [from, to]),
+      db.rawQuery(
+          "SELECT COUNT(*) as c, COALESCE(SUM(principal_amount),0) as s "
+          "FROM pledges WHERE status='closed' AND DATE(closure_date) BETWEEN ? AND ?",
+          [from, to]),
+      db.rawQuery(
+          "SELECT COALESCE(SUM(total_interest_paid),0) as s FROM pledges "
+          "WHERE status='closed' AND DATE(closure_date) BETWEEN ? AND ?",
+          [from, to]),
+      db.rawQuery(
+          "SELECT COUNT(DISTINCT customer_id) as c FROM pledges "
+          "WHERE ((status='open' AND DATE(start_date) BETWEEN ? AND ?) "
+          "OR (status='closed' AND DATE(closure_date) BETWEEN ? AND ?)) "
+          "AND customer_id IS NOT NULL",
+          [from, to, from, to]),
+    ]);
+
+    return TodayActivity(
+      newCount: (results[0].first['c'] as int?) ?? 0,
+      newAmount: (results[0].first['s'] as num?)?.toDouble() ?? 0,
+      closedCount: (results[1].first['c'] as int?) ?? 0,
+      closedAmount: (results[1].first['s'] as num?)?.toDouble() ?? 0,
+      interestCollected: (results[2].first['s'] as num?)?.toDouble() ?? 0,
+      activeCustomers: (results[3].first['c'] as int?) ?? 0,
+    );
+  }
+
   // ── Activity Drill-Down ───────────────────────────────────────────────────────
 
   Future<List<ActivityPledge>> getNewPledgesForDate(String date) async {
@@ -451,6 +494,7 @@ class AdminRepository {
         fromDate: pledgeDate,
         toDate: today,
         ratePercent: rate,
+        isRenewalPledge: row['renewal_parent_id'] != null,
       );
 
       final name = row['customer_name'] as String?;

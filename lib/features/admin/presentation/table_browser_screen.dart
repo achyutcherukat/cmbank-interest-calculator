@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/database/app_database.dart';
-import '../../../core/database/database_tables.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../data/admin_repository.dart';
 
@@ -24,30 +23,9 @@ class TableBrowserScreen extends StatefulWidget {
 
 class _TableBrowserScreenState extends State<TableBrowserScreen>
     with WidgetsBindingObserver {
-  static const _tables = [
-    DatabaseTables.customers,
-    DatabaseTables.pledges,
-    DatabaseTables.pledgeItems,
-    DatabaseTables.payments,
-    DatabaseTables.bankAccounts,
-    DatabaseTables.dailyBalance,
-    DatabaseTables.dailyAccountBalance,
-    DatabaseTables.dayReconciliation,
-    DatabaseTables.dailyStock,
-    DatabaseTables.stockAdjustments,
-    DatabaseTables.users,
-    DatabaseTables.goldRates,
-    DatabaseTables.expenseCategories,
-    DatabaseTables.settings,
-    DatabaseTables.auditLog,
-    DatabaseTables.backupLog,
-    DatabaseTables.photoSyncLog,
-    DatabaseTables.itemTypes,
-    DatabaseTables.purityTypes,
-    DatabaseTables.calcHistory,
-  ];
-
   static const _rowLimit = 500;
+
+  List<String> _tables = [];
 
   String? _selectedTable;
   List<String> _columns = [];
@@ -64,6 +42,19 @@ class _TableBrowserScreenState extends State<TableBrowserScreen>
     WidgetsBinding.instance.addObserver(this);
     if (!AdminSession.isValid && mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) => Navigator.pop(context));
+    }
+    _loadTables();
+  }
+
+  Future<void> _loadTables() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    );
+    if (mounted) {
+      setState(() {
+        _tables = rows.map((r) => r['name'] as String).toList();
+      });
     }
   }
 
@@ -207,11 +198,11 @@ class _TableBrowserScreenState extends State<TableBrowserScreen>
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           isDense: true,
         ),
-        hint: const Text('Select a table…'),
+        hint: Text(_tables.isEmpty ? 'Loading tables…' : 'Select a table…'),
         items: _tables
             .map((t) => DropdownMenuItem(value: t, child: Text(t)))
             .toList(),
-        onChanged: _onTableSelected,
+        onChanged: _tables.isEmpty ? null : _onTableSelected,
       ),
     );
   }

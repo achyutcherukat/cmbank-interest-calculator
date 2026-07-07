@@ -106,11 +106,17 @@ class _GoldAccountBalanceScreenState extends State<GoldAccountBalanceScreen> {
         children: [
           Expanded(
             flex: 3,
-            child: Text(isoToDisplay(d.date),
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: FlowColors.darkText)),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(isoToDisplay(d.date),
+                  maxLines: 1,
+                  softWrap: false,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: FlowColors.darkText)),
+            ),
           ),
           _amtCell(d.opening, 3, FlowColors.darkText),
           _amtCell(d.moneyIn, 3, FlowColors.green),
@@ -124,13 +130,18 @@ class _GoldAccountBalanceScreenState extends State<GoldAccountBalanceScreen> {
   Widget _amtCell(double value, int flex, Color color, {bool bold = false}) {
     return Expanded(
       flex: flex,
-      child: Text(
-        money(value),
-        textAlign: TextAlign.right,
-        style: TextStyle(
-            fontSize: 13,
-            fontWeight: bold ? FontWeight.bold : FontWeight.w500,
-            color: color),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerRight,
+        child: Text(
+          money(value),
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: bold ? FontWeight.bold : FontWeight.w500,
+              color: color),
+        ),
       ),
     );
   }

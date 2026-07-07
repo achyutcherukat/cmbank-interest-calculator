@@ -10,6 +10,9 @@ import '../../../shared/widgets/flow_widgets.dart';
 import '../../accounts/data/bank_account_repository.dart';
 import '../../gold_stock/data/gold_rates_repository.dart';
 
+/// Primary-device first-time setup. The Primary/Secondary choice happens earlier
+/// in [DeviceModeSelectionScreen]; this wizard is only reached for a Primary
+/// device's fresh setup (via the Restore-or-setup screen).
 class FirstLaunchWizard extends StatefulWidget {
   const FirstLaunchWizard({super.key, required this.onComplete});
 
@@ -183,7 +186,9 @@ class _FirstLaunchWizardState extends State<FirstLaunchWizard> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _buildPrimarySetup();
+
+  Widget _buildPrimarySetup() {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: CMBColors.navy,

@@ -21,6 +21,10 @@ class DatabaseTables {
   static const itemTypes = 'item_types';
   static const purityTypes = 'purity_types';
   static const calcHistory = 'calc_history';
+  static const chartOfAccounts = 'chart_of_accounts';
+  static const journalEntries = 'journal_entries';
+  static const journalLines = 'journal_lines';
+  static const ledgerYearEndClosures = 'ledger_year_end_closures';
 }
 
 class DatabaseSchema {
@@ -120,8 +124,10 @@ CREATE TABLE IF NOT EXISTS payments (
     'PART_PAYMENT_RECEIVED',
     'LOAN_INCREASE_DISBURSED',
     'EXPENSE',
-    'ADJUSTMENT')),
+    'ADJUSTMENT',
+    'CAPITAL')),
   sub_category TEXT,
+  ledger_account_id INTEGER REFERENCES chart_of_accounts(id),
   direction TEXT NOT NULL
     CHECK(direction IN ('in','out')),
   amount REAL NOT NULL DEFAULT 0,
@@ -131,7 +137,8 @@ CREATE TABLE IF NOT EXISTS payments (
   pledge_id INTEGER REFERENCES pledges(id),
   notes TEXT,
   created_by INTEGER REFERENCES users(id),
-  created_at DATETIME NOT NULL
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME
 )
 ''';
 
@@ -237,6 +244,7 @@ CREATE TABLE IF NOT EXISTS stock_adjustments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   adjustment_date DATE NOT NULL,
   weight REAL NOT NULL,
+  gross_weight REAL NOT NULL DEFAULT 0,
   count INTEGER NOT NULL,
   reason TEXT NOT NULL,
   created_by INTEGER REFERENCES users(id),
@@ -368,6 +376,66 @@ CREATE TABLE IF NOT EXISTS calc_history (
 )
 ''';
 
+  static const createChartOfAccounts = '''
+CREATE TABLE IF NOT EXISTS chart_of_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  account_type TEXT NOT NULL CHECK(account_type IN
+    ('asset','liability','capital','income','expense')),
+  linked_table TEXT,
+  linked_id INTEGER,
+  is_system INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  display_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL
+)
+''';
+
+  static const createJournalEntries = '''
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_date DATE NOT NULL,
+  entry_type TEXT NOT NULL CHECK(entry_type IN ('AUTO','MANUAL')),
+  source_type TEXT NOT NULL CHECK(source_type IN
+    ('payment','pledge','manual','opening_balance')),
+  source_id INTEGER,
+  narration TEXT NOT NULL,
+  is_reversed INTEGER NOT NULL DEFAULT 0,
+  reversed_by_entry_id INTEGER REFERENCES journal_entries(id),
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at DATETIME NOT NULL
+)
+''';
+
+  static const createJournalLines = '''
+CREATE TABLE IF NOT EXISTS journal_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  journal_entry_id INTEGER NOT NULL REFERENCES journal_entries(id),
+  account_id INTEGER NOT NULL REFERENCES chart_of_accounts(id),
+  pledge_id INTEGER REFERENCES pledges(id),
+  debit REAL NOT NULL DEFAULT 0,
+  credit REAL NOT NULL DEFAULT 0,
+  is_virtual INTEGER NOT NULL DEFAULT 0,
+  narration TEXT,
+  created_at DATETIME NOT NULL
+)
+''';
+
+  static const createLedgerYearEndClosures = '''
+CREATE TABLE IF NOT EXISTS ledger_year_end_closures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  financial_year TEXT NOT NULL UNIQUE,
+  journal_entry_id INTEGER NOT NULL REFERENCES journal_entries(id),
+  total_income REAL NOT NULL,
+  total_expenses REAL NOT NULL,
+  net_result REAL NOT NULL,
+  closed_by INTEGER NOT NULL REFERENCES users(id),
+  closed_at DATETIME NOT NULL
+)
+''';
+
   static const createIndexes = <String>[
     'CREATE INDEX IF NOT EXISTS idx_pledges_status ON pledges(status)',
     'CREATE INDEX IF NOT EXISTS idx_pledges_pledge_no ON pledges(pledge_no)',
@@ -382,6 +450,13 @@ CREATE TABLE IF NOT EXISTS calc_history (
     'CREATE INDEX IF NOT EXISTS idx_daily_account_balance_bank_account_id ON daily_account_balance(bank_account_id)',
     'CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)',
     'CREATE INDEX IF NOT EXISTS idx_photo_sync_log_synced ON photo_sync_log(is_synced)',
+    'CREATE INDEX IF NOT EXISTS idx_chart_of_accounts_linked ON chart_of_accounts(linked_table, linked_id)',
+    'CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(entry_date)',
+    'CREATE INDEX IF NOT EXISTS idx_journal_entries_source ON journal_entries(source_type, source_id)',
+    'CREATE INDEX IF NOT EXISTS idx_journal_lines_entry_id ON journal_lines(journal_entry_id)',
+    'CREATE INDEX IF NOT EXISTS idx_journal_lines_account_id ON journal_lines(account_id)',
+    'CREATE INDEX IF NOT EXISTS idx_journal_lines_pledge_id ON journal_lines(pledge_id)',
+    'CREATE INDEX IF NOT EXISTS idx_payments_ledger_account_id ON payments(ledger_account_id)',
   ];
 
   /// All table names that existed in schema version 6 and earlier. Used by the
@@ -425,6 +500,10 @@ CREATE TABLE IF NOT EXISTS calc_history (
     createItemTypes,
     createPurityTypes,
     createCalcHistory,
+    createChartOfAccounts,
+    createJournalEntries,
+    createJournalLines,
+    createLedgerYearEndClosures,
     ...createIndexes,
   ];
 }

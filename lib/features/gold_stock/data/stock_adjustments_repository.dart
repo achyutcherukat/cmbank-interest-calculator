@@ -7,6 +7,7 @@ class StockAdjustment {
     required this.id,
     required this.adjustmentDate,
     required this.weight,
+    required this.grossWeight,
     required this.count,
     required this.reason,
     this.createdBy,
@@ -16,6 +17,7 @@ class StockAdjustment {
   final int id;
   final String adjustmentDate;
   final double weight; // positive = added, negative = removed
+  final double grossWeight; // positive = added, negative = removed
   final int count;
   final String reason;
   final int? createdBy;
@@ -26,6 +28,7 @@ class StockAdjustment {
       id: map['id'] as int,
       adjustmentDate: map['adjustment_date'] as String? ?? '',
       weight: (map['weight'] as num?)?.toDouble() ?? 0.0,
+      grossWeight: (map['gross_weight'] as num?)?.toDouble() ?? 0.0,
       count: (map['count'] as int?) ?? 0,
       reason: map['reason'] as String? ?? '',
       createdBy: map['created_by'] as int?,
@@ -44,6 +47,7 @@ class StockAdjustmentsRepository {
   Future<int> addAdjustment({
     required String date,
     required double weight,
+    double grossWeight = 0,
     required int count,
     required String reason,
     int? userId,
@@ -53,6 +57,7 @@ class StockAdjustmentsRepository {
     return db.insert('stock_adjustments', {
       'adjustment_date': date,
       'weight': weight,
+      'gross_weight': grossWeight,
       'count': count,
       'reason': reason,
       'created_by': userId,
@@ -71,17 +76,20 @@ class StockAdjustmentsRepository {
     return rows.map(StockAdjustment.fromMap).toList();
   }
 
-  /// Returns the net (signed) total weight and count of adjustments for [date].
-  Future<({double weight, int count})> getTotalAdjustmentForDate(
-      String date) async {
+  /// Returns the net (signed) total weight, gross weight and count of adjustments for [date].
+  Future<({double weight, double grossWeight, int count})>
+      getTotalAdjustmentForDate(String date) async {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery(
-      'SELECT COALESCE(SUM(weight), 0) AS w, COALESCE(SUM(count), 0) AS c '
+      'SELECT COALESCE(SUM(weight), 0) AS w, '
+      'COALESCE(SUM(gross_weight), 0) AS gw, '
+      'COALESCE(SUM(count), 0) AS c '
       'FROM stock_adjustments WHERE adjustment_date = ?',
       [date],
     );
     return (
       weight: (rows.first['w'] as num?)?.toDouble() ?? 0.0,
+      grossWeight: (rows.first['gw'] as num?)?.toDouble() ?? 0.0,
       count: (rows.first['c'] as int?) ?? 0,
     );
   }

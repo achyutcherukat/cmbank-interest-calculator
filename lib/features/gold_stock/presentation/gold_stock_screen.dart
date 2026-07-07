@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/services/non_business_day_service.dart';
+import '../../../core/services/print_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
+import '../../stock/stock_print_report.dart';
 import '../../../features/admin/data/admin_repository.dart';
 import '../../../features/auth/data/auth_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
+import '../../../shared/widgets/restricted_action.dart';
 import '../data/gold_stock_repository.dart';
+import 'adjust_stock_screen.dart';
 import 'gold_in_drill_down_screen.dart';
 import 'gold_out_drill_down_screen.dart';
 
@@ -65,6 +70,90 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
     _load();
   }
 
+  // ─── Print / Save PDF (locked days only) ────────────────────────────────────
+
+  void _showPrintSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 8),
+            Text('Stock Register — ${_displayDate(_selectedDate)}',
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.primary)),
+            ListTile(
+              leading: const Icon(Icons.print, color: FlowColors.primary),
+              title: const Text('Print'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _runPrint(save: false);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt, color: FlowColors.primary),
+              title: const Text('Save as PDF'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _runPrint(save: true);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _runPrint({required bool save}) async {
+    final dateStr = _dateKey(_selectedDate);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    try {
+      final doc = await StockPrintReport.generate(dateStr);
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading
+      if (save) {
+        await PrintService.saveAsPdf(
+          pdf: doc,
+          fileName: 'StockRegister_${_fileStamp(_selectedDate)}.pdf',
+          context: context,
+        );
+      } else {
+        await PrintService.printDocument(
+          pdf: doc,
+          documentName: 'Stock Register ${_displayDate(_selectedDate)}',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not generate report: $e')),
+      );
+    }
+  }
+
+  String _fileStamp(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-${d.year}';
+
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
@@ -106,6 +195,14 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
         title: const Text('Stock Register',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
         actions: [
+          // Print / Save PDF — only for locked days (hidden otherwise to avoid
+          // confusion for unlocked/today-not-yet-verified days).
+          if (locked)
+            IconButton(
+              icon: const Icon(Icons.print),
+              tooltip: 'Print / Save PDF',
+              onPressed: _showPrintSheet,
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _load,
@@ -555,7 +652,8 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
   Widget _unlockCard(DailyStockRecord r) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: SizedBox(
+      child: RestrictedAction(
+        child: SizedBox(
         width: double.infinity,
         height: 54,
         child: ElevatedButton.icon(
@@ -571,6 +669,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -582,26 +681,66 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
       child: Container(
         color: Colors.white,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        child: SizedBox(
-          width: double.infinity,
-          height: 58,
-          child: ElevatedButton.icon(
-            onPressed: _record == null ? null : _checkPrevDayAndVerify,
-            icon: const Icon(Icons.verified, color: FlowColors.goldRich),
-            label: const Text('VERIFY STOCK',
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: FlowColors.textOnNavySmall)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: FlowColors.primary,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RestrictedAction(
+              child: SizedBox(
+                height: 50,
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _showAdjustStock,
+                  icon: const Icon(Icons.tune, size: 18),
+                  label: const Text('ADJUST STOCK',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: FlowColors.orangeLight,
+                    foregroundColor: FlowColors.orange,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
             ),
-          ),
+            const SizedBox(height: 10),
+            RestrictedAction(
+              child: SizedBox(
+                width: double.infinity,
+                height: 58,
+                child: ElevatedButton.icon(
+                  onPressed: _record == null ? null : _checkPrevDayAndVerify,
+                  icon: const Icon(Icons.verified, color: FlowColors.goldRich),
+                  label: const Text('VERIFY STOCK',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: FlowColors.textOnNavySmall)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: FlowColors.primary,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _showAdjustStock() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AdjustStockScreen(
+          dateStr: _dateKey(_selectedDate),
+          displayDate: _displayDate(_selectedDate),
+        ),
+      ),
+    );
+    if (result == true && mounted) _load();
   }
 
   // ── Locked status bar ─────────────────────────────────────────────────────────
@@ -683,12 +822,25 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
     if (!mounted) return;
 
     // No row (never opened) or already locked → allow.
+    // For Sundays with no row: also auto-close the cashbook side so the user
+    // doesn't hit a cashbook block when closing the day later.
     if (prevRecord == null || prevRecord.isLocked) {
+      if (prevRecord == null) {
+        await NonBusinessDayService.autoCloseIfNonBusinessDay(prevIso);
+        if (!mounted) return;
+      }
       _showVerifySheet();
       return;
     }
 
-    // Previous day exists but is unverified → block.
+    // Previous day exists but is unverified — auto-close if Sunday, else block.
+    final isClosed =
+        await NonBusinessDayService.autoCloseIfNonBusinessDay(prevIso);
+    if (!mounted) return;
+    if (isClosed) {
+      _showVerifySheet();
+      return;
+    }
     _showPrevDayBlockedDialog(prevDate, prevIso);
   }
 
@@ -943,6 +1095,13 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
       _entered && _grossDiff.abs() < 0.005 && _weightDiff.abs() < 0.005;
 
   @override
+  void initState() {
+    super.initState();
+    _grossWeightCtrl.text = widget.record.closingGrossWeight.toStringAsFixed(2);
+    _weightCtrl.text = widget.record.closingWeight.toStringAsFixed(2);
+  }
+
+  @override
   void dispose() {
     _grossWeightCtrl.dispose();
     _weightCtrl.dispose();
@@ -1188,7 +1347,8 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
               ],
 
               // Lock button
-              SizedBox(
+              RestrictedAction(
+                child: SizedBox(
                 width: double.infinity,
                 height: 58,
                 child: ElevatedButton.icon(
@@ -1211,6 +1371,7 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
                         borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
+              ),
               ),
             ],
           ),

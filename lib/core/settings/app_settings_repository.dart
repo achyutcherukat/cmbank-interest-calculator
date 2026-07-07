@@ -27,6 +27,13 @@ class AppSettingsRepository {
     return value.toLowerCase() == 'true';
   }
 
+  /// Whether this install is configured as a read-only Secondary device.
+  /// Central definition used by [DeviceModeService] to gate write actions.
+  Future<bool> isSecondaryDevice() async {
+    final mode = (await getString('device_mode'))?.trim().toLowerCase();
+    return mode == 'secondary';
+  }
+
   Future<void> upsertMany(Map<String, ({String value, String type})> values) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
