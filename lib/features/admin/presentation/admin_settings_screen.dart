@@ -254,7 +254,8 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 40),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 40)
+                  .withNavBarInset(context),
               children: [
                 _sectionHeader('General', Icons.tune),
                 RestrictedAction(child: _interestRateTile()),
@@ -639,13 +640,32 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     );
   }
 
-  /// Step 1 — re-verify admin PIN, then show the SQL confirmation, then run.
+  /// Step 1 — re-verify admin PIN, run the read-only verify SELECT (current
+  /// values), then show the SQL confirmation, then run.
   Future<void> _startDataFix() async {
     if (!await _promptAdminPin()) return;
+    final preRows = await _runDataFixVerifyQuery();
     if (!mounted) return;
-    final confirmed = await _showDataFixConfirm();
+    final confirmed = await _showDataFixConfirm(preRows);
     if (confirmed != true || !mounted) return;
     await _runDataFix();
+  }
+
+  /// Runs the fix's optional read-only verify SELECT; null if none is defined.
+  Future<List<Map<String, Object?>>?> _runDataFixVerifyQuery() async {
+    final query = dataFixVerifyQueries[AppBranding.flavor];
+    if (query == null) return null;
+    final db = await AppDatabase.instance.database;
+    return db.rawQuery(query);
+  }
+
+  /// Renders verify-SELECT rows as aligned `column: value` lines per row.
+  String _formatVerifyRows(List<Map<String, Object?>> rows) {
+    if (rows.isEmpty) return '(no matching rows)';
+    return rows
+        .map((row) =>
+            row.entries.map((e) => '${e.key}: ${e.value}').join('  |  '))
+        .join('\n');
   }
 
   /// Re-prompts the admin PIN; returns true only on a correct entry. Mirrors the
@@ -706,9 +726,15 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     return ok ?? false;
   }
 
-  /// Step 2 — shows the full SQL that will run; returns true on CONFIRM & RUN.
-  Future<bool?> _showDataFixConfirm() {
-    final sql = (dataFixStatements[AppBranding.flavor] ?? []).join('\n\n');
+  /// Step 2 — shows the current values (pre-fix verify SELECT) and the full
+  /// SQL that will run; returns true on CONFIRM & RUN.
+  Future<bool?> _showDataFixConfirm(List<Map<String, Object?>>? preRows) {
+    var sql = (dataFixStatements[AppBranding.flavor] ?? []).join('\n\n');
+    if (preRows != null) {
+      sql = '── CURRENT VALUES (${preRows.length} row(s)) ──\n'
+          '${_formatVerifyRows(preRows)}\n\n'
+          '── STATEMENTS ──\n$sql';
+    }
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -811,13 +837,22 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
         );
       });
 
+      // Post-fix verify SELECT — shows the corrected values in the result
+      // dialog. Read-only, so running it outside the transaction is fine.
+      final postRows = await _runDataFixVerifyQuery();
+
       if (!mounted) return;
       // Section check now fails → it disappears on rebuild.
       setState(() {
         _lastDataFixApplied = dataFixVersion;
         _busy = false;
       });
-      await _showDataFixResult('Data fix applied successfully.', success: true);
+      var message = 'Data fix applied successfully.';
+      if (postRows != null) {
+        message += '\n\nValues after fix (${postRows.length} row(s)):\n'
+            '${_formatVerifyRows(postRows)}';
+      }
+      await _showDataFixResult(message, success: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);

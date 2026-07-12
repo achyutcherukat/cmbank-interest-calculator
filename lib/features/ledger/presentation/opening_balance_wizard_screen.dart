@@ -318,7 +318,8 @@ class _OpeningBalanceWizardScreenState
 
   Widget _postedView() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      padding:
+          const EdgeInsets.fromLTRB(16, 16, 16, 32).withNavBarInset(context),
       children: [
         FlowCard(
           borderColor: FlowColors.green,
@@ -393,7 +394,8 @@ class _OpeningBalanceWizardScreenState
 
   Widget _wizardForm() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      padding:
+          const EdgeInsets.fromLTRB(16, 16, 16, 24).withNavBarInset(context),
       children: [
         FlowCard(
           child: Text(

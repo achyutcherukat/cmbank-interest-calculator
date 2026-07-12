@@ -208,7 +208,8 @@ class _ProfitLossScreenState extends State<ProfitLossScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 32)
+                        .withNavBarInset(context),
                     children: [
                       if (!_openingPosted)
                         OpeningBalancePendingBanner(

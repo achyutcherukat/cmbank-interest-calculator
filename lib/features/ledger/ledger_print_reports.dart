@@ -1,6 +1,5 @@
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 import '../../app/app_branding.dart';
 import '../../core/constants/business_info.dart';
@@ -85,14 +84,12 @@ class LedgerPrintReports {
 
     final rangeLabel = '${_display(fromDate)} to ${_display(toDate)}';
     final doc = await _newDocument();
-    final logo = await PrintService.loadLogo();
 
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 22),
-        header: (context) =>
-            _letterhead(logo, 'General Ledger', rangeLabel),
+        header: (context) => _letterhead('General Ledger', rangeLabel),
         footer: _footer,
         build: (context) => [
           if (sections.isEmpty)
@@ -361,12 +358,11 @@ class LedgerPrintReports {
     ]));
 
     final doc = await _newDocument();
-    final logo = await PrintService.loadLogo();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 22),
       header: (context) =>
-          _letterhead(logo, 'Trial Balance', 'As of ${_display(asOfDate)}'),
+          _letterhead('Trial Balance', 'As of ${_display(asOfDate)}'),
       footer: _footer,
       build: (context) => [
         pw.Table(columnWidths: columns, children: tableRows),
@@ -437,12 +433,11 @@ class LedgerPrintReports {
     }
 
     final doc = await _newDocument();
-    final logo = await PrintService.loadLogo();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 22),
-      header: (context) => _letterhead(logo, 'Profit & Loss',
-          '${_display(fromDate)} to ${_display(toDate)}'),
+      header: (context) => _letterhead(
+          'Profit & Loss', '${_display(fromDate)} to ${_display(toDate)}'),
       footer: _footer,
       build: (context) => [
         sectionTable('Income', visible(income), incomeValue),
@@ -567,12 +562,11 @@ class LedgerPrintReports {
     }
 
     final doc = await _newDocument();
-    final logo = await PrintService.loadLogo();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 22),
       header: (context) =>
-          _letterhead(logo, 'Balance Sheet', 'As of ${_display(asOfDate)}'),
+          _letterhead('Balance Sheet', 'As of ${_display(asOfDate)}'),
       footer: _footer,
       build: (context) => [
         sectionTable('Assets', LedgerAccountType.asset, debitNatured: true),
@@ -609,10 +603,11 @@ class LedgerPrintReports {
   // ─── Shared building blocks (reused by the other ledger reports) ────────────
 
   /// Noto Sans document theme — same font setup as the Cash Book report, so
-  /// the ₹ glyph renders.
+  /// the ₹ glyph renders. Loaded from a bundled asset (not google_fonts'
+  /// runtime fetch) so it works offline.
   static Future<pw.Document> _newDocument() async {
-    final baseFont = await PdfGoogleFonts.notoSansRegular();
-    final boldFont = await PdfGoogleFonts.notoSansBold();
+    final baseFont = await PrintService.notoSansRegular();
+    final boldFont = await PrintService.notoSansBold();
     return pw.Document(
       theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
     );
@@ -620,20 +615,13 @@ class LedgerPrintReports {
 
   /// Letterhead on every page: business + flavor tag, report title, the
   /// report's own date/period context, and the generation timestamp.
-  static pw.Widget _letterhead(
-      pw.ImageProvider logo, String reportTitle, String reportContext) {
+  static pw.Widget _letterhead(String reportTitle, String reportContext) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
         pw.Row(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
-            pw.SizedBox(
-              height: 50,
-              width: 50,
-              child: pw.Image(logo, fit: pw.BoxFit.contain),
-            ),
-            pw.SizedBox(width: 12),
             pw.Expanded(
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,

@@ -18,7 +18,7 @@ const _kItemTypes = [
   'Waist Belt', 'Nose Ring', 'Other',
 ];
 
-const _kPurityTypes = ['24K', '22K', '18K', 'Other'];
+const _kPurityTypes = ['916', '22K', 'Other'];
 
 // ─── Data classes ─────────────────────────────────────────────────────────────
 
@@ -30,6 +30,9 @@ class ItemEntryData {
     this.quantity = 1,
     this.notes,
     this.purity,
+    this.goldRate,
+    this.pledgeRate,
+    this.itemValue,
   });
 
   final String itemType;
@@ -38,6 +41,16 @@ class ItemEntryData {
   final int quantity;
   final String? notes;
   final String? purity;
+
+  /// Rate/value snapshot for this item's purity. [getData] always resolves
+  /// these to a concrete number (0 when unresolved) — from a live
+  /// [SharedItemDetailsStep.purityRates] lookup for a brand-new item, or
+  /// preserved from the item's own historical snapshot when editing an
+  /// existing pledge (see [SharedItemDetailsStep.initialData]). Nullable here
+  /// only so construction sites that don't care about rates can omit them.
+  final double? goldRate;
+  final double? pledgeRate;
+  final double? itemValue;
 }
 
 class ItemDetailsData {
@@ -56,11 +69,32 @@ class _TypeQtyPair {
 }
 
 class _ItemEntry {
+  _ItemEntry({this.origin});
+
+  /// The [ItemEntryData] this entry was built from (i.e. an existing item
+  /// carried over via [SharedItemDetailsStep.initialData]). Null for a
+  /// brand-new entry added via "ADD ANOTHER ITEM LIST" — there's no original
+  /// to report as released if this one gets deleted.
+  final ItemEntryData? origin;
+
   final grossCtrl = TextEditingController();
   final netCtrl = TextEditingController();
   final notesCtrl = TextEditingController();
   final purityCtrl = TextEditingController();
+  final rateCtrl = TextEditingController();
+  final grossFocus = FocusNode();
+  final netFocus = FocusNode();
   List<_TypeQtyPair> typeQtyPairs = [];
+
+  // Historical gold-rate snapshot, carried over from an existing pledge_items
+  // row (editMode). Pledge rate has no separate snapshot field any more —
+  // rateCtrl (visible and user-editable) is always the source of truth for
+  // it, seeded from the historical value or a live lookup once at entry
+  // creation. Gold rate stays pinned to its snapshot only while
+  // [snapshotPurity] still matches the currently-selected purity; changing
+  // the purity invalidates it and falls back to a live lookup.
+  String? snapshotPurity;
+  double? snapshotGoldRate;
 
   double get grossWeight => double.tryParse(grossCtrl.text) ?? 0;
   double get netWeight => double.tryParse(netCtrl.text) ?? 0;
@@ -81,6 +115,9 @@ class _ItemEntry {
     netCtrl.dispose();
     notesCtrl.dispose();
     purityCtrl.dispose();
+    rateCtrl.dispose();
+    grossFocus.dispose();
+    netFocus.dispose();
   }
 }
 
@@ -94,6 +131,8 @@ class SharedItemDetailsStep extends StatefulWidget {
     this.initialData,
     this.pledgeNumber = '',
     this.prefillOtherItem = false,
+    this.purityRates = const {},
+    this.showPhotoSection = true,
   });
 
   final double grossWeight;
@@ -102,16 +141,42 @@ class SharedItemDetailsStep extends StatefulWidget {
   final String pledgeNumber;
   final bool prefillOtherItem;
 
+  /// Whether to show the "Item Photos" camera/gallery section. Defaults to
+  /// true (new-pledge / edit-pledge item entry). Callers that only reuse this
+  /// step for editing an existing pledge's items without capturing new
+  /// photos (e.g. Part Release "item release") pass false.
+  final bool showPhotoSection;
+
+  /// Current gold/pledge rate per purity name (from `gold_rates`, per
+  /// purity_type). When non-empty, each item shows a live "Item Value"
+  /// (net weight × that purity's pledge rate) and a running total, and
+  /// [getData] resolves goldRate/pledgeRate/itemValue on every item. Left
+  /// empty (default) for callers that don't use per-purity rates — the value
+  /// UI stays hidden and resolved rates come back as 0, exactly as before
+  /// this parameter existed.
+  final Map<String, ({double? goldRate, double pledgeRate})> purityRates;
+
   @override
   State<SharedItemDetailsStep> createState() => SharedItemDetailsStepState();
 }
 
-class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
+class SharedItemDetailsStepState extends State<SharedItemDetailsStep>
+    with AutomaticKeepAliveClientMixin {
   final _imagePicker = ImagePicker();
   late List<_ItemEntry> _items;
   List<File> _itemPhotos = [];
   List<String> _itemTypes = _kItemTypes;
   List<String> _purityTypes = _kPurityTypes;
+  final List<ItemEntryData> _removedOrigins = [];
+
+  // This step is embedded inside plain scrolling ListViews (Part Release's
+  // "item release" step in particular sits well above the Proceed button, with
+  // several cards in between). Without keep-alive, Flutter's sliver list
+  // disposes this State once it scrolls far enough outside the viewport +
+  // cache extent, silently discarding every edit/deletion the moment the user
+  // scrolls down to reach a button further below.
+  @override
+  bool get wantKeepAlive => true;
 
   Future<void> _loadLookups() async {
     try {
@@ -166,18 +231,25 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
     final d = widget.initialData;
     if (d != null && d.items.isNotEmpty) {
       _items = d.items.map((e) {
-        final entry = _ItemEntry();
+        final entry = _ItemEntry(origin: e);
         entry.grossCtrl.text =
             e.grossWeight > 0 ? e.grossWeight.toString() : '';
         entry.netCtrl.text = e.netWeight > 0 ? e.netWeight.toString() : '';
         entry.notesCtrl.text = e.notes ?? '';
         entry.purityCtrl.text = e.purity ?? '';
         entry.typeQtyPairs = _parseItemType(e.itemType, e.quantity);
+        // 0 means "no historical rate on file" (pre-dates this feature or a
+        // brand-new item carried over from an in-progress session) — treat
+        // it as no snapshot so build() falls back to a live rate lookup.
+        entry.snapshotPurity = e.purity;
+        entry.snapshotGoldRate = (e.goldRate ?? 0) > 0 ? e.goldRate : null;
+        final snapshotPledgeRate = (e.pledgeRate ?? 0) > 0 ? e.pledgeRate : null;
+        _seedRate(entry, fallbackRate: snapshotPledgeRate);
         return entry;
       }).toList();
       _itemPhotos = List.from(d.photos);
     } else {
-      _items = [_ItemEntry()];
+      _items = [_newItemEntry()];
       // Pre-fill first item with totals from Step 1.
       if (widget.grossWeight > 0) {
         _items[0].grossCtrl.text = widget.grossWeight.toString();
@@ -192,11 +264,59 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
   }
 
   @override
+  void didUpdateWidget(covariant SharedItemDetailsStep oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The parent loads purityRates asynchronously, often after this widget
+    // (and its default item) has already been created. Catch up any rate box
+    // still blank so the default purity's rate doesn't get stuck at "not set"
+    // once the rates finish loading. Never overwrites a value the user has
+    // already typed or that already resolved from a prior update.
+    if (widget.purityRates.isEmpty ||
+        identical(widget.purityRates, oldWidget.purityRates)) {
+      return;
+    }
+    for (final entry in _items) {
+      if (entry.rateCtrl.text.trim().isNotEmpty) continue;
+      _seedRate(entry);
+    }
+  }
+
+  @override
   void dispose() {
     for (final item in _items) {
       item.dispose();
     }
     super.dispose();
+  }
+
+  /// Creates a blank item entry defaulted to '916' purity (or the first
+  /// active purity if '916' isn't configured), with its Pledge Rate box
+  /// pre-populated from the live rate for that purity.
+  _ItemEntry _newItemEntry({bool autofocusGross = false}) {
+    final entry = _ItemEntry();
+    if (_purityTypes.contains('916')) {
+      entry.purityCtrl.text = '916';
+    } else if (_purityTypes.isNotEmpty) {
+      entry.purityCtrl.text = _purityTypes.first;
+    }
+    _seedRate(entry);
+    if (autofocusGross) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) entry.grossFocus.requestFocus();
+      });
+    }
+    return entry;
+  }
+
+  /// Populates [entry]'s Pledge Rate box: [fallbackRate] (a historical
+  /// snapshot) if given, otherwise a live lookup for the entry's current
+  /// purity. Leaves the box blank if neither is available.
+  void _seedRate(_ItemEntry entry, {double? fallbackRate}) {
+    final purity = entry.purityCtrl.text.trim();
+    final live = purity.isEmpty ? null : widget.purityRates[purity]?.pledgeRate;
+    final rate = fallbackRate ?? live;
+    entry.rateCtrl.text =
+        (rate != null && rate > 0) ? formatIndian(rate.round().toString()) : '';
   }
 
   /// Returns a validation error message, or null if all Item Lists are valid.
@@ -219,24 +339,64 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
     return null;
   }
 
+  /// The original (pre-edit) data of every Item List the staff has deleted
+  /// via the trash icon, in deletion order. Entries added via "ADD ANOTHER
+  /// ITEM LIST" (no [ItemEntryData] origin) are never included here even if
+  /// later deleted, since there's nothing "released" about them.
+  List<ItemEntryData> getRemovedItems() => List.unmodifiable(_removedOrigins);
+
   ItemDetailsData getData() {
     return ItemDetailsData(
       items: _items
           .where((e) => e.grossWeight > 0 || e.netWeight > 0)
-          .map((e) => ItemEntryData(
-                itemType: e.itemType,
-                grossWeight: e.grossWeight,
-                netWeight: e.netWeight,
-                quantity: e.typeQtyPairs.isEmpty ? 1 : e.totalQuantity,
-                notes: e.notesCtrl.text.trim().isEmpty
-                    ? null
-                    : e.notesCtrl.text.trim(),
-                purity: e.purityCtrl.text.trim().isEmpty
-                    ? null
-                    : e.purityCtrl.text.trim(),
-              ))
+          .map((e) {
+            final resolved = _resolvedRates(e);
+            return ItemEntryData(
+              itemType: e.itemType,
+              grossWeight: e.grossWeight,
+              netWeight: e.netWeight,
+              quantity: e.typeQtyPairs.isEmpty ? 1 : e.totalQuantity,
+              notes: e.notesCtrl.text.trim().isEmpty
+                  ? null
+                  : e.notesCtrl.text.trim(),
+              purity: e.purityCtrl.text.trim().isEmpty
+                  ? null
+                  : e.purityCtrl.text.trim(),
+              goldRate: resolved.goldRate,
+              pledgeRate: resolved.pledgeRate,
+              itemValue: resolved.itemValue,
+            );
+          })
           .toList(),
       photos: List.unmodifiable(_itemPhotos),
+    );
+  }
+
+  /// Resolves this item's gold rate and value. Pledge rate is read directly
+  /// from [_ItemEntry.rateCtrl] — the visible, user-editable box is always
+  /// the source of truth for it (seeded once from a historical snapshot or a
+  /// live lookup; see [_seedRate]). Gold rate has no visible box, so it stays
+  /// pinned to its historical snapshot while the purity is unchanged,
+  /// otherwise falls back to a live lookup against
+  /// [SharedItemDetailsStep.purityRates].
+  ({double goldRate, double pledgeRate, double itemValue}) _resolvedRates(
+      _ItemEntry entry) {
+    final currentPurity = entry.purityCtrl.text.trim();
+    double goldRate;
+    if (entry.snapshotGoldRate != null &&
+        entry.snapshotPurity == currentPurity) {
+      goldRate = entry.snapshotGoldRate!;
+    } else {
+      final live =
+          currentPurity.isEmpty ? null : widget.purityRates[currentPurity];
+      goldRate = live?.goldRate ?? 0;
+    }
+    final pledgeRate =
+        double.tryParse(entry.rateCtrl.text.replaceAll(',', '')) ?? 0;
+    return (
+      goldRate: goldRate,
+      pledgeRate: pledgeRate,
+      itemValue: entry.netWeight * pledgeRate,
     );
   }
 
@@ -367,6 +527,7 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // required by AutomaticKeepAliveClientMixin
     final totalGross = _items.fold(0.0, (s, i) => s + i.grossWeight);
     final totalNet = _items.fold(0.0, (s, i) => s + i.netWeight);
     final remGross = widget.grossWeight - totalGross;
@@ -402,7 +563,8 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
         Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 8),
           child: TextButton.icon(
-            onPressed: () => setState(() => _items.add(_ItemEntry())),
+            onPressed: () => setState(
+                () => _items.add(_newItemEntry(autofocusGross: true))),
             icon: const Icon(Icons.add_circle,
                 color: FlowColors.primary, size: 20),
             label: const Text('ADD ANOTHER ITEM LIST',
@@ -412,6 +574,12 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                     fontWeight: FontWeight.bold)),
           ),
         ),
+
+        // Running total max pledge value (only when a caller supplies
+        // per-purity rates — hidden entirely for callers that don't use
+        // them). Full-width card matching the style used for this figure on
+        // the Pledge Basics step.
+        if (widget.purityRates.isNotEmpty) _totalMaxPledgeValueCard(),
 
         // Running totals (only show if reference weights are provided)
         if (widget.grossWeight > 0 || widget.netWeight > 0)
@@ -437,8 +605,10 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
             ),
           ),
 
-        const _ItemSecHeader('Item Photos'),
-        _photoBlock(),
+        if (widget.showPhotoSection) ...[
+          const _ItemSecHeader('Item Photos'),
+          _photoBlock(),
+        ],
       ],
     );
   }
@@ -465,11 +635,14 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                       fontWeight: FontWeight.bold,
                       color: FlowColors.primary)),
               const Spacer(),
-              if (index > 0)
+              if (_items.length > 1)
                 GestureDetector(
                   onTap: () => setState(() {
-                    _items[index].dispose();
-                    _items.removeAt(index);
+                    final removed = _items.removeAt(index);
+                    if (removed.origin != null) {
+                      _removedOrigins.add(removed.origin!);
+                    }
+                    removed.dispose();
                   }),
                   child: const Icon(Icons.delete_outline,
                       color: Colors.red, size: 22),
@@ -489,16 +662,16 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
 
           if (entry.typeQtyPairs.isNotEmpty) ...[
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 10,
+              runSpacing: 10,
               children: List.generate(entry.typeQtyPairs.length, (ci) {
                 final pair = entry.typeQtyPairs[ci];
                 return Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     color: FlowColors.accent,
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(24),
                     border:
                         Border.all(color: FlowColors.primaryLight, width: 1.2),
                   ),
@@ -507,15 +680,19 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                     children: [
                       Text('${pair.qty} × ${pair.type}',
                           style: const TextStyle(
-                              fontSize: 13,
+                              fontSize: 16,
                               fontWeight: FontWeight.w600,
                               color: FlowColors.primary)),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
                       GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () =>
                             setState(() => entry.typeQtyPairs.removeAt(ci)),
-                        child: const Icon(Icons.close,
-                            size: 15, color: FlowColors.primary),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.close,
+                              size: 20, color: FlowColors.primary),
+                        ),
                       ),
                     ],
                   ),
@@ -544,28 +721,53 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
           const Divider(height: 1, color: Color(0xFFEEEEEE)),
           const SizedBox(height: 12),
 
-          // Shared weight fields for this Item List
+          // Purity + Pledge Rate for this Item List — purity first, rate
+          // beside it (auto-populated from purity, live-editable).
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: _decimalField('Gross (g)', entry.grossCtrl)),
+              Expanded(
+                flex: 3,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _purityValue(entry.purityCtrl.text),
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Gold Purity (optional)', isDense: true),
+                  items: _purityItems(entry.purityCtrl.text)
+                      .map((t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t, style: const TextStyle(fontSize: 16))))
+                      .toList(),
+                  onChanged: (v) => setState(() {
+                    entry.purityCtrl.text = v ?? '';
+                    _seedRate(entry);
+                  }),
+                ),
+              ),
               const SizedBox(width: 10),
-              Expanded(child: _decimalField('Net (g)', entry.netCtrl)),
+              Expanded(flex: 2, child: _rateField(entry)),
             ],
           ),
 
-          // Shared purity for this Item List
-          DropdownButtonFormField<String>(
-            initialValue: _purityValue(entry.purityCtrl.text),
-            isExpanded: true,
-            decoration: const InputDecoration(
-                labelText: 'Gold Purity (optional)', isDense: true),
-            items: _purityItems(entry.purityCtrl.text)
-                .map((t) => DropdownMenuItem(
-                    value: t,
-                    child: Text(t, style: const TextStyle(fontSize: 16))))
-                .toList(),
-            onChanged: (v) =>
-                setState(() => entry.purityCtrl.text = v ?? ''),
+          // Shared weight fields for this Item List — gross then net, with
+          // Enter/Done moving focus gross → net → dismiss keyboard.
+          Row(
+            children: [
+              Expanded(
+                child: _decimalField('Gross (g)', entry.grossCtrl,
+                    focusNode: entry.grossFocus,
+                    textInputAction: TextInputAction.next,
+                    onSubmitted: (_) => entry.netFocus.requestFocus()),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _decimalField('Net (g)', entry.netCtrl,
+                    focusNode: entry.netFocus,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) =>
+                        FocusScope.of(context).unfocus()),
+              ),
+            ],
           ),
           const SizedBox(height: 6),
 
@@ -586,6 +788,106 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
                   fontWeight: FontWeight.w600,
                   color: FlowColors.medText),
             ),
+
+          // Live item value (only when a caller supplies per-purity rates)
+          if (widget.purityRates.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _itemValueLine(entry),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _itemValueLine(_ItemEntry entry) {
+    final purity = entry.purityCtrl.text.trim();
+    if (purity.isEmpty) {
+      return const Text(
+        'Select a gold purity to calculate this item\'s value.',
+        style: TextStyle(
+            fontSize: 13,
+            color: FlowColors.orange,
+            fontWeight: FontWeight.w600),
+      );
+    }
+    final resolved = _resolvedRates(entry);
+    if (resolved.pledgeRate <= 0) {
+      return const Text(
+        'Enter a pledge rate above to calculate this item\'s value.',
+        style: TextStyle(
+            fontSize: 13,
+            color: FlowColors.orange,
+            fontWeight: FontWeight.w600),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: FlowColors.accent,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text('Max Pledge Amount (${money(resolved.pledgeRate)}/g)',
+              style: const TextStyle(
+                  fontSize: 13,
+                  color: FlowColors.medText,
+                  fontWeight: FontWeight.w600)),
+          Text(money(resolved.itemValue),
+              style: const TextStyle(
+                  fontSize: 15,
+                  color: FlowColors.primary,
+                  fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  /// Pledge Rate box shown beside the purity dropdown. Auto-populated from
+  /// the purity's current rate (see [_seedRate]) but freely editable — typing
+  /// here overrides the rate used for this item's value; changing purity
+  /// resets it back to that purity's live rate.
+  Widget _rateField(_ItemEntry entry) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: entry.rateCtrl,
+        keyboardType: TextInputType.number,
+        inputFormatters: [IndianNumberFormatter()],
+        style: const TextStyle(fontSize: 16),
+        onChanged: (_) => setState(() {}),
+        decoration: const InputDecoration(
+          labelText: 'Pledge Rate (₹/g)',
+          prefixText: '₹ ',
+          isDense: true,
+        ),
+      ),
+    );
+  }
+
+  /// Full-width card matching the style used for this figure on the Pledge
+  /// Basics step (FlowCard + the same label/amount typography).
+  Widget _totalMaxPledgeValueCard() {
+    final total =
+        _items.fold(0.0, (s, e) => s + _resolvedRates(e).itemValue);
+    return FlowCard(
+      backgroundColor: FlowColors.accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('TOTAL MAX PLEDGE VALUE',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: FlowColors.medText,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 4),
+          Text(money(total),
+              style: const TextStyle(
+                  color: FlowColors.primary,
+                  fontSize: 30,
+                  fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -614,12 +916,21 @@ class SharedItemDetailsStepState extends State<SharedItemDetailsStep> {
     return [current, ..._purityTypes];
   }
 
-  Widget _decimalField(String label, TextEditingController ctrl) {
+  Widget _decimalField(
+    String label,
+    TextEditingController ctrl, {
+    FocusNode? focusNode,
+    TextInputAction? textInputAction,
+    ValueChanged<String>? onSubmitted,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: TextField(
         controller: ctrl,
+        focusNode: focusNode,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textInputAction: textInputAction,
+        onSubmitted: onSubmitted,
         inputFormatters: [
           FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
         ],

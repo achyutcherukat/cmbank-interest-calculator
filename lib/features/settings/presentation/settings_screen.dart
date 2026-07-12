@@ -103,7 +103,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         iconTheme: const IconThemeData(color: FlowColors.goldRich, size: 30),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20).withNavBarInset(context),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

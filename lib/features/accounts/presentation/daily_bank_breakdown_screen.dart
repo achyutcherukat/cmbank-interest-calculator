@@ -233,14 +233,20 @@ class _DailyBankBreakdownScreenState
                   color: CMBColors.textOnNavyMuted,
                   letterSpacing: 1.0)),
           const SizedBox(height: 8),
-          Text(
-            moneyWithPaise(total),
-            style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: total < 0
-                    ? Colors.red[200]
-                    : CMBColors.textOnNavyLarge),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              moneyWithPaise(total),
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: total < 0
+                      ? Colors.red[200]
+                      : CMBColors.textOnNavyLarge),
+            ),
           ),
         ],
       ),

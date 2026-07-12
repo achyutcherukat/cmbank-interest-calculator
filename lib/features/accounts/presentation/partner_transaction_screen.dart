@@ -202,7 +202,7 @@ class _PartnerTransactionScreenState extends State<PartnerTransactionScreen> {
                   child: Text('No partner capital accounts found.',
                       style: TextStyle(fontSize: 16, color: Colors.black45)))
               : SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(20).withNavBarInset(context),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -248,7 +248,10 @@ class _PartnerTransactionScreenState extends State<PartnerTransactionScreen> {
                               decoration: const InputDecoration(
                                 labelText: 'Note (optional)',
                               ),
-                              maxLines: 2,
+                              keyboardType: TextInputType.text,
+                              textInputAction: TextInputAction.done,
+                              minLines: 1,
+                              maxLines: null,
                             ),
                           ],
                         ),

@@ -67,7 +67,7 @@ class _GoldAccountBalanceScreenState extends State<GoldAccountBalanceScreen> {
                     _headerRow(),
                     Expanded(
                       child: ListView.builder(
-                        padding: EdgeInsets.zero,
+                        padding: EdgeInsets.zero.withNavBarInset(context),
                         itemCount: visibleDays.length + (hasMore ? 1 : 0),
                         itemBuilder: (ctx, i) {
                           if (i == visibleDays.length) {

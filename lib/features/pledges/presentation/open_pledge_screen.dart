@@ -12,6 +12,7 @@ import '../../../features/accounts/data/bank_account_repository.dart';
 import '../../../features/accounts/data/daily_balance_repository.dart';
 import '../../../features/calculator/data/interest_calculator.dart';
 import '../../../features/gold_stock/data/gold_rates_repository.dart';
+import '../../admin/data/purity_types_repository.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/restorable_photo_thumb.dart';
 import '../../../shared/widgets/restricted_action.dart';
@@ -21,6 +22,8 @@ import '../data/payment_model.dart';
 import '../data/pledge_item_model.dart';
 import '../data/pledge_model.dart';
 import '../data/pledge_repository.dart';
+import '../pledge_form_print_actions.dart';
+import '../../../shared/widgets/shared_item_details_step.dart';
 import '../../customers/presentation/customer_detail_screen.dart';
 import 'load_existing_pledge_screen.dart';
 import 'new_pledge_screen.dart';
@@ -130,7 +133,7 @@ class _OpenPledgeScreenState extends State<OpenPledgeScreen> {
               onRefresh: _loadFirstPage,
               child: ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16).withNavBarInset(context),
                 itemCount: 1 + _pledges.length + 1,
                 itemBuilder: (ctx, index) {
                   if (index == 0) return _searchHeader();
@@ -623,9 +626,17 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
         backgroundColor: FlowColors.primary,
         foregroundColor: FlowColors.goldRich,
         title: Text('Pledge ${p.pledgeNumber}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.print),
+            tooltip: 'Print Pledge Form',
+            onPressed: () => showPledgeFormPrintOptions(context,
+                pledgeId: p.id!, pledgeNo: p.pledgeNumber),
+          ),
+        ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           if (widget.contextDate != null)
             ContextDateBanner(
@@ -686,6 +697,13 @@ class _PledgeDetailScreenState extends State<PledgeDetailScreen> {
               ],
             ),
           ),
+
+          // Notes (e.g. items released during a Part Release)
+          if (p.notes?.isNotEmpty == true)
+            FlowCard(
+              header: 'Notes',
+              child: Text(p.notes!, style: const TextStyle(fontSize: 15)),
+            ),
 
           // Item Details (one card per item)
           for (int i = 0; i < _items.length; i++)
@@ -1086,7 +1104,8 @@ class _InterestEditorSheetState extends State<_InterestEditorSheet> {
           EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SingleChildScrollView(
         child: Container(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28)
+              .withNavBarInset(context),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1378,7 +1397,7 @@ class _ClosedPledgeDetailScreenState extends State<ClosedPledgeDetailScreen> {
         title: Text('Pledge ${p.pledgeNumber}'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           // Status row
           Row(
@@ -1440,6 +1459,13 @@ class _ClosedPledgeDetailScreenState extends State<ClosedPledgeDetailScreen> {
               ],
             ),
           ),
+
+          // Notes (e.g. items released during a Part Release)
+          if (p.notes?.isNotEmpty == true)
+            FlowCard(
+              header: 'Notes',
+              child: Text(p.notes!, style: const TextStyle(fontSize: 15)),
+            ),
 
           // Financial Summary
           FlowCard(
@@ -2154,7 +2180,7 @@ class _ClosePledgeScreenState extends State<ClosePledgeScreen> {
         title: const Text('Close Pledge'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           if (widget.contextDate != null)
             ContextDateBanner(
@@ -2517,7 +2543,7 @@ class _RenewSelectionScreenState extends State<RenewSelectionScreen> {
         title: const Text('Renew Pledge'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           if (widget.contextDate != null)
             ContextDateBanner(
@@ -2758,7 +2784,7 @@ class __RenewPledgeScreenState extends State<_RenewPledgeScreen> {
         title: const Text('Renew Pledge'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           if (widget.contextDate != null)
             ContextDateBanner(
@@ -2839,6 +2865,9 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
   final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
   List<BankAccount> _bankAccounts = const [];
   List<PledgeItemModel> _pledgeItems = [];
+  bool _releaseItems = false;
+  final _itemReleaseKey = GlobalKey<SharedItemDetailsStepState>();
+  Map<String, ({double? goldRate, double pledgeRate})> _purityRates = {};
 
   double get _ppAmt => double.tryParse(_amtCtrl.text.replaceAll(',', '')) ?? 0;
   double get _ppPrincipalPaid => _sub == 'separate'
@@ -2860,6 +2889,7 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
     super.initState();
     _loadBankAccounts();
     _loadPledgeItems();
+    _loadPurityRates();
   }
 
   Future<void> _loadBankAccounts() async {
@@ -2872,6 +2902,51 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
     final items = await PledgeRepository.instance.getItemsForPledge(widget.pledge.id!);
     if (mounted) setState(() => _pledgeItems = items);
   }
+
+  /// Current gold/pledge rate per active purity name, for the item-release
+  /// step's live "Item Value" display — same lookup as new-pledge item entry.
+  Future<void> _loadPurityRates() async {
+    final purities = await PurityTypesRepository.instance.getAllPurityTypes();
+    final ratesByPurityId =
+        await GoldRatesRepository.instance.getCurrentRatesByPurity();
+    final rates = {
+      for (final p in purities)
+        if (p.isActive && ratesByPurityId[p.id] != null)
+          p.name: ratesByPurityId[p.id]!,
+    };
+    if (mounted) setState(() => _purityRates = rates);
+  }
+
+  /// Converts an existing pledge item to the shared item-editor's data shape,
+  /// preserving its rate/value snapshot.
+  ItemEntryData _toEntryData(PledgeItemModel it) => ItemEntryData(
+        itemType: it.itemType,
+        grossWeight: it.grossWeight,
+        netWeight: it.netWeight,
+        quantity: it.quantity,
+        notes: it.notes,
+        purity: it.purity.isEmpty ? null : it.purity,
+        goldRate: it.goldRate > 0 ? it.goldRate : null,
+        pledgeRate: it.pledgeRate > 0 ? it.pledgeRate : null,
+        itemValue: it.itemValue > 0 ? it.itemValue : null,
+      );
+
+  /// Converts an edited/kept item back to a [PledgeItemModel] for the new
+  /// pledge. `pledgeId`/`createdAt` are placeholders the repository
+  /// overwrites on insert.
+  PledgeItemModel _toPledgeItem(ItemEntryData e) => PledgeItemModel(
+        pledgeId: widget.pledge.id!,
+        itemType: e.itemType,
+        quantity: e.quantity,
+        grossWeight: e.grossWeight,
+        netWeight: e.netWeight,
+        purity: e.purity ?? '',
+        pledgeRate: e.pledgeRate ?? 0,
+        goldRate: e.goldRate ?? 0,
+        itemValue: e.itemValue ?? 0,
+        notes: e.notes,
+        createdAt: DateTime.now().toIso8601String(),
+      );
 
   String _bankLabel(int? id) {
     if (id == null) return 'Bank';
@@ -2889,11 +2964,35 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
   void _snack(String msg) => ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: Colors.red));
 
+  /// Builds the auto-generated note describing released items, one line per
+  /// item, e.g. "Necklace released (12.50 g)".
+  String _buildReleaseNote(List<ItemEntryData> released) {
+    final lines = released
+        .map((it) =>
+            '${it.itemType} released (${it.netWeight.toStringAsFixed(2)} g)')
+        .join('\n');
+    return 'Items released to customer:\n$lines';
+  }
+
   void _proceed() {
     if (_ppAmt <= 0) { _snack('Enter a payment amount'); return; }
     if (_ppNewAmt <= 0) { _snack('Resulting new pledge amount cannot be zero'); return; }
     final err = _payKey.currentState?.validate();
     if (err != null) { _snack(err); return; }
+
+    List<PledgeItemModel>? keptItems;
+    List<ItemEntryData>? releasedItems;
+    String? releaseNote;
+    if (_releaseItems) {
+      final itemState = _itemReleaseKey.currentState;
+      final itemErr = itemState?.validate();
+      if (itemErr != null) { _snack(itemErr); return; }
+      keptItems = itemState?.getData().items.map(_toPledgeItem).toList();
+      releasedItems = itemState?.getRemovedItems();
+      if (releasedItems != null && releasedItems.isNotEmpty) {
+        releaseNote = _buildReleaseNote(releasedItems);
+      }
+    }
 
     final payState = _payKey.currentState;
     final cashAmt = payState?.cashAmount ?? _ppTotalPay;
@@ -2909,6 +3008,13 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
     final ppTotalPay = _ppTotalPay;
     final ppPrincipalPaid = _ppPrincipalPaid;
     final ppAmt = _ppAmt;
+    final newPledgeGross = keptItems != null
+        ? keptItems.fold(0.0, (s, i) => s + i.grossWeight)
+        : widget.pledge.grossWeight;
+    final newPledgeNet = keptItems != null
+        ? keptItems.fold(0.0, (s, i) => s + i.netWeight)
+        : widget.pledge.netWeight;
+    final displayItems = keptItems ?? _pledgeItems;
 
     Navigator.push(
       context,
@@ -2942,9 +3048,9 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
                 _SR(_bankLabel(bankAccountId), money(bankAmt)),
               ],
             ]),
-            ..._pledgeItems.asMap().entries.map((e) {
+            ...displayItems.asMap().entries.map((e) {
               final it = e.value;
-              final label = _pledgeItems.length == 1 ? 'Item Details' : 'Item ${e.key + 1}';
+              final label = displayItems.length == 1 ? 'Item Details' : 'Item ${e.key + 1}';
               return _SummarySection(label, [
                 if (it.itemType != 'Other') _SR('Type', it.itemType),
                 _SR('Quantity', '${it.quantity}'),
@@ -2956,11 +3062,14 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
                 if (it.notes != null && it.notes!.isNotEmpty) _SR('Notes', it.notes!),
               ]);
             }),
+            if (releasedItems != null && releasedItems.isNotEmpty)
+              _SummarySection('Items Released to Customer', [
+                for (final it in releasedItems)
+                  _SR(it.itemType, '${it.netWeight.toStringAsFixed(2)} g'),
+              ]),
             _SummarySection('Gold Details', [
-              _SR('Total Gross Weight',
-                  '${widget.pledge.grossWeight.toStringAsFixed(2)} g'),
-              _SR('Total Net Weight',
-                  '${widget.pledge.netWeight.toStringAsFixed(2)} g'),
+              _SR('Total Gross Weight', '${newPledgeGross.toStringAsFixed(2)} g'),
+              _SR('Total Net Weight', '${newPledgeNet.toStringAsFixed(2)} g'),
             ]),
             if (widget.pledge.customerName.isNotEmpty)
               _SummarySection('Customer Details', [
@@ -2986,6 +3095,8 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
                 bankAmount: bankAmt,
                 bankAccountId: bankAccountId,
                 contextDate: ctxIso,
+                keptItems: keptItems,
+                notesOverride: releaseNote,
               );
             }
             return PledgeRepository.instance.partPaymentFixedAmount(
@@ -2997,6 +3108,8 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
               bankAmount: bankAmt,
               bankAccountId: bankAccountId,
               contextDate: ctxIso,
+              keptItems: keptItems,
+              notesOverride: releaseNote,
             );
           },
         ),
@@ -3014,13 +3127,45 @@ class __PartPaymentScreenState extends State<_PartPaymentScreen> {
         title: const Text('Part Payment'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           if (widget.contextDate != null)
             ContextDateBanner(
                 label: 'Renewal Date', date: widget.contextDate!),
           _pledgeSummaryCard(widget.pledge, widget.interest, widget.total),
           const SizedBox(height: 16),
+          if (_pledgeItems.isNotEmpty) ...[
+            FlowCard(
+              child: CheckboxListTile(
+                value: _releaseItems,
+                onChanged: (v) =>
+                    setState(() => _releaseItems = v ?? false),
+                title: const Text('Release some items to customer',
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600)),
+                subtitle: const Text(
+                    'Customer takes back one or more items; the new pledge keeps only the rest'),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            ),
+            if (_releaseItems) ...[
+              const FlowSectionTitle('Select Items to Keep'),
+              SharedItemDetailsStep(
+                key: _itemReleaseKey,
+                grossWeight: 0,
+                netWeight: 0,
+                pledgeNumber: widget.pledge.pledgeNumber,
+                showPhotoSection: false,
+                purityRates: _purityRates,
+                initialData: ItemDetailsData(
+                  items: _pledgeItems.map(_toEntryData).toList(),
+                  photos: const [],
+                ),
+              ),
+            ],
+          ],
           _subOptionCard(
             selected: _sub == 'separate',
             title: 'Pay Principal + Interest',
@@ -3127,9 +3272,31 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
   late TextEditingController _amtCtrl;
   String _intSub = 'pay';
   final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
-  double? _currentPledgeRate;
+  // Current gold/pledge rate per purity name, from gold_rates (Prompt 1).
+  Map<String, ({double? goldRate, double pledgeRate})> _purityRatesByName = {};
   List<BankAccount> _bankAccounts = const [];
   List<PledgeItemModel> _pledgeItems = [];
+
+  /// Max Possible value per purity: this pledge's items grouped by purity,
+  /// net weight summed within each group, each group valued at that purity's
+  /// own current pledge rate (same rate lookup as before — just scoped per
+  /// purity instead of applied once globally).
+  List<({String purity, double netWeight, double rate, double value})>
+      get _purityBreakdown {
+    final netWeightByPurity = <String, double>{};
+    for (final item in _pledgeItems) {
+      final purity = item.purity.isNotEmpty ? item.purity : 'Unspecified';
+      netWeightByPurity[purity] =
+          (netWeightByPurity[purity] ?? 0) + item.netWeight;
+    }
+    return netWeightByPurity.entries.map((e) {
+      final rate = _purityRatesByName[e.key]?.pledgeRate ?? 0;
+      return (purity: e.key, netWeight: e.value, rate: rate, value: e.value * rate);
+    }).toList();
+  }
+
+  double get _maxPossible =>
+      _purityBreakdown.fold(0.0, (s, e) => s + e.value);
 
   double get _ilNewAmt =>
       double.tryParse(_amtCtrl.text.replaceAll(',', '')) ??
@@ -3146,13 +3313,21 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
     super.initState();
     _amtCtrl = TextEditingController(
         text: formatIndian(widget.pledge.loanAmount.round().toString()));
-    GoldRatesRepository.instance.getCurrentRates().then((rates) {
-      if (mounted && rates != null && rates.pledgeRate > 0) {
-        setState(() => _currentPledgeRate = rates.pledgeRate);
-      }
-    });
+    _loadPurityRates();
     _loadBankAccounts();
     _loadPledgeItems();
+  }
+
+  Future<void> _loadPurityRates() async {
+    final purities = await PurityTypesRepository.instance.getAllPurityTypes();
+    final ratesByPurityId =
+        await GoldRatesRepository.instance.getCurrentRatesByPurity();
+    final map = {
+      for (final p in purities)
+        if (p.isActive && ratesByPurityId[p.id] != null)
+          p.name: ratesByPurityId[p.id]!,
+    };
+    if (mounted) setState(() => _purityRatesByName = map);
   }
 
   Future<void> _loadBankAccounts() async {
@@ -3309,8 +3484,8 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currentPledgeRate = _currentPledgeRate ?? 0;
-    final maxPossible = widget.pledge.netWeight * currentPledgeRate;
+    final breakdown = _purityBreakdown;
+    final maxPossible = _maxPossible;
     final nd = _netDisburse;
 
     return Scaffold(
@@ -3321,7 +3496,7 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
         title: const Text('Loan Top-Up'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           if (widget.contextDate != null)
             ContextDateBanner(
@@ -3334,13 +3509,22 @@ class __IncreaseLoanScreenState extends State<_IncreaseLoanScreen> {
               header: 'Max Possible Amount',
               child: Column(
                 children: [
-                  DetailRow(
-                      label: 'Net Weight',
-                      value:
-                          '${widget.pledge.netWeight.toStringAsFixed(2)} g'),
-                  DetailRow(
-                      label: 'Pledge Rate',
-                      value: '${money(currentPledgeRate)}/g'),
+                  if (breakdown.length > 1)
+                    ...breakdown.map((b) => DetailRow(
+                        label:
+                            '${b.purity} (${b.netWeight.toStringAsFixed(2)} g × ${money(b.rate)}/g)',
+                        value: money(b.value)))
+                  else ...[
+                    DetailRow(
+                        label: 'Net Weight',
+                        value: breakdown.isEmpty
+                            ? '0.00 g'
+                            : '${breakdown.first.netWeight.toStringAsFixed(2)} g'),
+                    DetailRow(
+                        label: 'Pledge Rate',
+                        value:
+                            '${money(breakdown.isEmpty ? 0 : breakdown.first.rate)}/g'),
+                  ],
                   DetailRow(
                       label: 'Max Possible',
                       value: money(maxPossible),
@@ -3527,7 +3711,7 @@ class __RenewalSummaryScreenState extends State<_RenewalSummaryScreen> {
         title: Text(widget.title),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           Container(
             width: double.infinity,
@@ -3674,7 +3858,7 @@ class _RenewalSuccessScreen extends StatelessWidget {
         ),
         body: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24).withNavBarInset(context),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [

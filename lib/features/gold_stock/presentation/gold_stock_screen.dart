@@ -15,7 +15,11 @@ import 'gold_in_drill_down_screen.dart';
 import 'gold_out_drill_down_screen.dart';
 
 class GoldStockScreen extends StatefulWidget {
-  const GoldStockScreen({super.key});
+  const GoldStockScreen({super.key, this.initialDate});
+
+  /// Date to open on, e.g. when linked from a specific Cash Book day.
+  /// Defaults to today when omitted.
+  final DateTime? initialDate;
 
   @override
   State<GoldStockScreen> createState() => _GoldStockScreenState();
@@ -33,7 +37,7 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedDate = _today;
+    _selectedDate = widget.initialDate ?? _today;
     _isAdmin = AdminSession.isValid;
     _load();
   }
@@ -219,7 +223,8 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24)
+                          .withNavBarInset(context),
                       children: [
                         if (record != null) ...[
                           _dailyStockCard(record),
@@ -511,55 +516,78 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${r.closingWeight.toStringAsFixed(2)} g',
-                    style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: FlowColors.darkText),
-                  ),
-                  const Text('Net Weight',
-                      style: TextStyle(fontSize: 13, color: Colors.black54)),
-                ],
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${r.closingWeight.toStringAsFixed(2)} g',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.darkText),
+                      ),
+                    ),
+                    const Text('Net Weight',
+                        style: TextStyle(fontSize: 13, color: Colors.black54)),
+                  ],
+                ),
               ),
               const Text('×',
                   style: TextStyle(fontSize: 22, color: Colors.black38)),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    _goldRate > 0
-                        ? '${money(_goldRate)}/g'
-                        : 'Rate not set',
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: _goldRate > 0
-                            ? FlowColors.orange
-                            : Colors.black38),
-                  ),
-                  const Text('Gold Rate',
-                      style: TextStyle(fontSize: 13, color: Colors.black54)),
-                ],
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        _goldRate > 0
+                            ? '${money(_goldRate)}/g'
+                            : 'Rate not set',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: _goldRate > 0
+                                ? FlowColors.orange
+                                : Colors.black38),
+                      ),
+                    ),
+                    const Text('Gold Rate',
+                        style: TextStyle(fontSize: 13, color: Colors.black54)),
+                  ],
+                ),
               ),
               const Text('=',
                   style: TextStyle(fontSize: 22, color: Colors.black38)),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    _goldRate > 0 ? money(estimatedValue) : '—',
-                    style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: FlowColors.primary),
-                  ),
-                  const Text('Est. Value',
-                      style: TextStyle(fontSize: 13, color: Colors.black54)),
-                ],
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        _goldRate > 0 ? money(estimatedValue) : '—',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: FlowColors.primary),
+                      ),
+                    ),
+                    const Text('Est. Value',
+                        style: TextStyle(fontSize: 13, color: Colors.black54)),
+                  ],
+                ),
               ),
             ],
           ),
@@ -752,44 +780,47 @@ class _GoldStockScreenState extends State<GoldStockScreen> {
     final icon = hasDiscrepancy ? Icons.warning_amber : Icons.check_circle;
     final label = hasDiscrepancy ? '🔒⚠️  Locked — Discrepancy noted' : '🔒✅  Locked — Verified';
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: bgColor,
-        border: Border(top: BorderSide(color: color, width: 1.5)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 24),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: color)),
-                if (r.lockedAt != null)
-                  Text(
-                    'Locked at ${_formatLockedTime(r.lockedAt!)}${r.lockedBy != null ? ' by ${r.lockedBy}' : ''}',
-                    style:
-                        const TextStyle(fontSize: 13, color: Colors.black54),
-                  ),
-                if (hasDiscrepancy && r.discrepancyNote != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      'Note: ${r.discrepancyNote}',
-                      style: TextStyle(fontSize: 13, color: color),
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: bgColor,
+          border: Border(top: BorderSide(color: color, width: 1.5)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: color)),
+                  if (r.lockedAt != null)
+                    Text(
+                      'Locked at ${_formatLockedTime(r.lockedAt!)}${r.lockedBy != null ? ' by ${r.lockedBy}' : ''}',
+                      style: const TextStyle(
+                          fontSize: 13, color: Colors.black54),
                     ),
-                  ),
-              ],
+                  if (hasDiscrepancy && r.discrepancyNote != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        'Note: ${r.discrepancyNote}',
+                        style: TextStyle(fontSize: 13, color: color),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1164,7 +1195,8 @@ class _VerifyStockSheetState extends State<_VerifyStockSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28)
+            .withNavBarInset(context),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

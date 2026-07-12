@@ -117,34 +117,52 @@ class DailyBalanceRepository {
     );
   }
 
-  /// Opening balance for [date]: the previous day's closing, or the configured
-  /// starting balance (settings) when no earlier day exists.
+  /// Opening balance for [date]: always the closing balance of the previous
+  /// calendar day ([date] − 1), or the configured starting balance (settings)
+  /// when [date] is the app's first day.
+  ///
+  /// Keying off the previous *calendar* day (not merely the most recent
+  /// existing row) means a day with activity but no `daily_balance` row — or an
+  /// unlocked gap day — is no longer skipped: its movements flow through to
+  /// every following day. See [_closingFor].
   Future<({double cash, double upi})> _openingFor(String date) async {
-    final db = await AppDatabase.instance.database;
-    final rows = await db.query(
-      'daily_balance',
-      where: 'business_date < ?',
-      whereArgs: [date],
-      orderBy: 'business_date DESC',
-      limit: 1,
-    );
+    final prev = _fmtIso(_parseIso(date).subtract(const Duration(days: 1)));
 
-    if (rows.isNotEmpty) {
-      final prev = DailyBalance.fromMap(rows.first);
-      if (prev.isLocked && prev.closingCash != null) {
-        return (cash: prev.closingCash!, upi: prev.closingUpi ?? 0.0);
-      }
-      // Unlocked previous day: compute its closing live.
-      final t = await calculateTotalsForDate(prev.businessDate,
-          openingCash: prev.openingCash, openingUpi: prev.openingUpi);
-      return (cash: t.closingCash, upi: t.closingUpi);
+    // Base case: nothing before the app's first day → settings opening.
+    final firstDate = await _appFirstDate();
+    if (firstDate == null || prev.compareTo(firstDate) < 0) {
+      final cash =
+          double.tryParse(await _settings.getString('opening_cash') ?? '0') ?? 0;
+      final upi =
+          double.tryParse(await _settings.getString('opening_upi') ?? '0') ?? 0;
+      return (cash: cash, upi: upi);
     }
 
-    final cash =
-        double.tryParse(await _settings.getString('opening_cash') ?? '0') ?? 0;
-    final upi =
-        double.tryParse(await _settings.getString('opening_upi') ?? '0') ?? 0;
-    return (cash: cash, upi: upi);
+    return _closingFor(prev);
+  }
+
+  /// Closing balance of [date]. For a locked day this is the stored
+  /// `closing_cash` / `closing_upi` (which also short-circuits the recursion in
+  /// [_openingFor], bounding it to the run of consecutive unlocked/missing days
+  /// immediately before the target). For an unlocked or row-less day it is
+  /// computed live: previous day's closing + the day's payments.
+  Future<({double cash, double upi})> _closingFor(String date) async {
+    final row = await getForDate(date);
+    if (row != null && row.isLocked && row.closingCash != null) {
+      return (cash: row.closingCash!, upi: row.closingUpi ?? 0.0);
+    }
+    final opening = await _openingFor(date);
+    final t = await calculateTotalsForDate(date,
+        openingCash: opening.cash, openingUpi: opening.upi);
+    return (cash: t.closingCash, upi: t.closingUpi);
+  }
+
+  /// The app's first day: the `app_use_start_date` setting, falling back to the
+  /// earliest `daily_balance` row for installs predating that setting.
+  Future<String?> _appFirstDate() async {
+    final setting = await _settings.getString('app_use_start_date');
+    if (setting != null && setting.isNotEmpty) return setting;
+    return getFirstRecordDate();
   }
 
   /// Live totals for [date], computed from the payments ledger. Opening values
@@ -186,8 +204,12 @@ class DailyBalanceRepository {
   /// day stays unlocked. Throws [LedgerPostingException] in that case.
   Future<DayTotals> lockDay(String date, int? userId) async {
     final record = await getOrCreateForDate(date);
+    // Re-derive the opening from the previous calendar day at lock time — the
+    // row's stored opening may be stale (e.g. created before the prior day's
+    // transactions existed). The refreshed value is persisted below.
+    final opening = await _openingFor(date);
     final totals = await calculateTotalsForDate(date,
-        openingCash: record.openingCash, openingUpi: record.openingUpi);
+        openingCash: opening.cash, openingUpi: opening.upi);
 
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toIso8601String();
@@ -195,6 +217,8 @@ class DailyBalanceRepository {
       await txn.update(
         'daily_balance',
         {
+          'opening_cash': opening.cash,
+          'opening_upi': opening.upi,
           'cash_in': totals.cashIn,
           'upi_in': totals.upiIn,
           'cash_out': totals.cashOut,

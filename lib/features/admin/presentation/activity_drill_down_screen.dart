@@ -138,8 +138,8 @@ class _ActivityDrillDownScreenState extends State<ActivityDrillDownScreen> {
                     ),
                     Expanded(
                       child: ListView.builder(
-                        padding:
-                            const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 40)
+                            .withNavBarInset(context),
                         itemCount: _count,
                         itemBuilder: (ctx, i) => _isCustomers
                             ? _CustomerRow(

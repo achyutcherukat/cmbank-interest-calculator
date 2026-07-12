@@ -327,6 +327,34 @@ class LedgerReportService {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// One row per active account with at least one journal line posted on
+  /// [date] (INNER JOIN — accounts with no activity that day are excluded
+  /// entirely, unlike [getTrialBalance]'s all-accounts LEFT JOIN), net =
+  /// debits − credits for just that date. Used by the Day Book report.
+  Future<List<TrialBalanceRow>> getDayBook(String date) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery('''
+      SELECT c.id, c.code, c.name, c.account_type,
+             SUM(jl.debit) - SUM(jl.credit) AS net
+      FROM journal_lines jl
+      JOIN journal_entries je ON je.id = jl.journal_entry_id
+      JOIN chart_of_accounts c ON c.id = jl.account_id
+      WHERE je.entry_date = ? AND c.is_active = 1
+      GROUP BY c.id, c.code, c.name, c.account_type
+      ORDER BY CAST(c.code AS INTEGER) ASC
+    ''', [date]);
+    return [
+      for (final r in rows)
+        TrialBalanceRow(
+          accountId: r['id'] as int,
+          code: r['code'] as String? ?? '',
+          name: r['name'] as String? ?? '',
+          accountType: r['account_type'] as String? ?? '',
+          net: (r['net'] as num?)?.toDouble() ?? 0.0,
+        ),
+    ];
+  }
+
   /// One row per active account with its net balance as of [asOfDate],
   /// ordered by code. Accounts with no activity return net 0.
   Future<List<TrialBalanceRow>> getTrialBalance(String asOfDate) async {

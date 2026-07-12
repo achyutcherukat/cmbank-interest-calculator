@@ -102,7 +102,7 @@ class _ClosedPledgesScreenState extends State<ClosedPledgesScreen> {
           : RefreshIndicator(
               onRefresh: _loadRecent,
               child: ListView(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(20).withNavBarInset(context),
                 children: [
                   const FlowSectionTitle('Search by Pledge Number'),
                   TextField(

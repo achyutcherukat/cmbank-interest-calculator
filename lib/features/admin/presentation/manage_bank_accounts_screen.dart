@@ -122,7 +122,8 @@ class _ManageBankAccountsScreenState extends State<ManageBankAccountsScreen> {
                   child: Text('No bank accounts yet.',
                       style: TextStyle(fontSize: 16, color: Colors.black45)))
               : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 96)
+                      .withNavBarInset(context),
                   itemCount: _accounts.length,
                   itemBuilder: (ctx, i) {
                     final acct = _accounts[i];

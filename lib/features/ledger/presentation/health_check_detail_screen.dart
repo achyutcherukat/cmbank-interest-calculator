@@ -129,7 +129,8 @@ class _HealthCheckDetailScreenState extends State<HealthCheckDetailScreen> {
       body: Stack(
         children: [
           ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 32)
+                .withNavBarInset(context),
             children: [
               if (!_result.hasIssues)
                 const Padding(

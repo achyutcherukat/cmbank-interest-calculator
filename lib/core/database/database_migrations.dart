@@ -60,6 +60,54 @@ class DatabaseMigrations {
     if (oldVersion < 17) {
       await _migrateV16toV17(db);
     }
+    if (oldVersion < 18) {
+      await _migrateV17toV18(db);
+    }
+    if (oldVersion < 19) {
+      await _migrateV18toV19(db);
+    }
+  }
+
+  /// New Loan item-first flow (Prompt 2): `pledge_items.pledge_rate`,
+  /// `gold_rate` and `item_value` snapshot the per-item rate looked up (by the
+  /// item's purity, from `gold_rates`) at the moment the item was entered, so
+  /// edits to purity-specific rates later never change what an already-saved
+  /// item recorded. Existing rows default to 0 (no snapshot) — this is not a
+  /// backfill, callers treat 0 as "no historical rate on file" and fall back
+  /// to a live rate lookup instead of trusting it. Guarded because a fresh
+  /// install (v19+) already creates these columns via the canonical schema.
+  static Future<void> _migrateV18toV19(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(pledge_items)');
+    final names = cols.map((c) => c['name']).toSet();
+    if (!names.contains('pledge_rate')) {
+      await db.execute(
+          'ALTER TABLE pledge_items ADD COLUMN pledge_rate REAL NOT NULL DEFAULT 0');
+    }
+    if (!names.contains('gold_rate')) {
+      await db.execute(
+          'ALTER TABLE pledge_items ADD COLUMN gold_rate REAL NOT NULL DEFAULT 0');
+    }
+    if (!names.contains('item_value')) {
+      await db.execute(
+          'ALTER TABLE pledge_items ADD COLUMN item_value REAL NOT NULL DEFAULT 0');
+    }
+  }
+
+  /// Multi-purity gold/pledge rates: `gold_rates.purity_type_id` scopes each
+  /// rate row to one purity type (FK to `purity_types`), so 22K/18K/24K/etc.
+  /// can carry independent current rates instead of one universal rate.
+  /// Existing rows are left with purity_type_id NULL — they remain valid
+  /// historical data for the legacy universal-rate readers and are not
+  /// backfilled to any purity. Guarded because a fresh install (v18+) already
+  /// creates the column via the canonical schema.
+  static Future<void> _migrateV17toV18(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(gold_rates)');
+    if (!cols.any((c) => c['name'] == 'purity_type_id')) {
+      await db.execute(
+        'ALTER TABLE gold_rates ADD COLUMN purity_type_id INTEGER '
+        'REFERENCES purity_types(id)',
+      );
+    }
   }
 
   /// Ledger Prompt 11: year-end closing tracker. Records which financial years

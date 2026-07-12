@@ -97,8 +97,8 @@ class _AgeingDrillDownScreenState extends State<AgeingDrillDownScreen> {
                     ),
                     Expanded(
                       child: ListView.builder(
-                        padding:
-                            const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 40)
+                            .withNavBarInset(context),
                         itemCount: _pledges.length,
                         itemBuilder: (ctx, i) => _PledgeCard(
                           pledge: _pledges[i],

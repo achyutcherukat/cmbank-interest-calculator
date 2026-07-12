@@ -152,7 +152,8 @@ class _AddEditCustomerScreenState extends State<AddEditCustomerScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100)
+                  .withNavBarInset(context),
               child: SharedCustomerDetailsStep(
                 key: _customerKey,
                 initialData: _initialData,

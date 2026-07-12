@@ -3,13 +3,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pdf/widgets.dart' as pw;
 
 import '../../../app/theme.dart';
 import '../../../core/database/app_database.dart';
-import '../../../core/services/print_service.dart';
 import '../../../core/settings/app_settings_repository.dart';
-import '../pledge_form_print_report.dart';
+import '../pledge_form_print_actions.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../../shared/widgets/shared_customer_details_step.dart';
 import '../../../shared/widgets/shared_item_details_step.dart';
@@ -17,6 +15,7 @@ import '../../../shared/widgets/shared_split_payment_widget.dart';
 import '../../../shared/widgets/restricted_action.dart';
 import '../../accounts/data/bank_account_model.dart';
 import '../../accounts/data/bank_account_repository.dart';
+import '../../admin/data/purity_types_repository.dart';
 import '../../customers/data/customer_repository.dart';
 import '../../gold_stock/data/gold_rates_repository.dart';
 import '../data/payment_model.dart';
@@ -58,27 +57,25 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
   int _step = 1;
   final _settingsRepo = AppSettingsRepository();
 
-  // ── Step 1 ──────────────────────────────────────────────────────────────────
-  final _grossWeightCtrl = TextEditingController();
-  final _netWeightCtrl = TextEditingController();
-  final _pledgeRateCtrl = TextEditingController();
-  final _pledgeNoCtrl = TextEditingController();
-  final _loanAmtCtrl = TextEditingController();
-  final _netFocus = FocusNode();
-  final _loanAmtFocus = FocusNode();
-  double _goldRate = 0;
-  bool _pledgeNoError = false;
-
-  // ── Step 2 — Customer ────────────────────────────────────────────────────────
-  final _customerKey = GlobalKey<SharedCustomerDetailsStepState>();
-  CustomerDetailsData? _capturedCustomer;
-
-  // ── Step 3 — Items ───────────────────────────────────────────────────────────
+  // ── Step 1 — Items ───────────────────────────────────────────────────────────
   final _itemsKey = GlobalKey<SharedItemDetailsStepState>();
   ItemDetailsData? _capturedItems;
   // Form photo paths for the existing pledge (edit mode only). Loaded from
   // photo_sync_log in _prefillForEdit() so the editPledge() call can pass them.
   List<String> _existingFormPhotoPaths = [];
+  // Current gold/pledge rate per purity name, from gold_rates (Prompt 1).
+  // Drives the live per-item value in Step 1 and the derived Step 2 figures.
+  Map<String, ({double? goldRate, double pledgeRate})> _purityRatesByName = {};
+
+  // ── Step 2 — Pledge Basics ───────────────────────────────────────────────────
+  final _pledgeNoCtrl = TextEditingController();
+  final _loanAmtCtrl = TextEditingController();
+  final _loanAmtFocus = FocusNode();
+  bool _pledgeNoError = false;
+
+  // ── Step 3 — Customer ────────────────────────────────────────────────────────
+  final _customerKey = GlobalKey<SharedCustomerDetailsStepState>();
+  CustomerDetailsData? _capturedCustomer;
 
   // ── Step 4 — Payment ─────────────────────────────────────────────────────────
   final _payKey = GlobalKey<SharedSplitPaymentWidgetState>();
@@ -95,13 +92,25 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
 
   final _scrollCtrl = ScrollController();
 
-  // ── Computed getters ─────────────────────────────────────────────────────────
-  double get _grossWeight => double.tryParse(_grossWeightCtrl.text) ?? 0;
-  double get _netWeight => double.tryParse(_netWeightCtrl.text) ?? 0;
-  double get _pledgeRate =>
-      double.tryParse(_pledgeRateCtrl.text.replaceAll(',', '')) ?? 0;
-  double get _maxPledgeValue => _netWeight * _pledgeRate;
-  double get _actualItemValue => _goldRate * _netWeight;
+  // ── Computed getters — all derived from the items captured in Step 1 ───────
+  List<ItemEntryData> get _items => _capturedItems?.items ?? const [];
+  double get _grossWeight => _items.fold(0.0, (s, e) => s + e.grossWeight);
+  double get _netWeight => _items.fold(0.0, (s, e) => s + e.netWeight);
+  // Sum of each item's (net weight × its purity's pledge rate) — the total
+  // loan-eligible value shown as "Max Pledge Value" / "Max Pledge Amount".
+  double get _maxPledgeValue => _items.fold(
+      0.0, (s, e) => s + (e.itemValue ?? (e.netWeight * (e.pledgeRate ?? 0))));
+  // Sum of each item's (net weight × its purity's gold/market rate) — the
+  // true market value of the gold pledged, independent of the pledge rate
+  // used to cap the loan amount.
+  double get _actualItemValue =>
+      _items.fold(0.0, (s, e) => s + e.netWeight * (e.goldRate ?? 0));
+  // Weighted averages (by net weight) — kept on the pledge row for backward
+  // compatibility with screens/reports that still show one rate per pledge.
+  double get _pledgeRate => _netWeight > 0 ? _maxPledgeValue / _netWeight : 0;
+  double get _goldRate =>
+      _netWeight > 0 ? _actualItemValue / _netWeight : 0;
+
   double get _loanAmount =>
       double.tryParse(_loanAmtCtrl.text.replaceAll(',', '')) ?? 0;
 
@@ -113,11 +122,22 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     } else {
       _loadDefaults();
     }
-    _grossWeightCtrl.addListener(() => setState(() {}));
-    _netWeightCtrl.addListener(() => setState(() {}));
-    _pledgeRateCtrl.addListener(() => setState(() {}));
     _loanAmtCtrl.addListener(() => setState(() {}));
     _loadBankAccounts();
+  }
+
+  /// Current gold/pledge rate per active purity name (Prompt 1's per-purity
+  /// gold_rates). Purities with no rate recorded yet are omitted.
+  Future<Map<String, ({double? goldRate, double pledgeRate})>>
+      _loadPurityRates() async {
+    final purities = await PurityTypesRepository.instance.getAllPurityTypes();
+    final ratesByPurityId =
+        await GoldRatesRepository.instance.getCurrentRatesByPurity();
+    return {
+      for (final p in purities)
+        if (p.isActive && ratesByPurityId[p.id] != null)
+          p.name: ratesByPurityId[p.id]!,
+    };
   }
 
   Future<void> _prefillForEdit() async {
@@ -125,11 +145,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     if (p == null) return;
 
     _pledgeNoCtrl.text = p.pledgeNumber;
-    _grossWeightCtrl.text = p.grossWeight.toStringAsFixed(2);
-    _netWeightCtrl.text = p.netWeight.toStringAsFixed(2);
-    _pledgeRateCtrl.text = formatIndian(p.pledgeRate.round().toString());
     _loanAmtCtrl.text = formatIndian(p.loanAmount.round().toString());
-    _goldRate = p.goldRate;
+    _purityRatesByName = await _loadPurityRates();
 
     // Pre-fill customer from the customer row
     final row = widget.existingCustomerRow;
@@ -177,6 +194,12 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                 quantity: it.quantity,
                 purity: it.purity.isNotEmpty ? it.purity : null,
                 notes: it.notes,
+                // 0 pre-dates this feature (Prompt 2) — treat as "no
+                // snapshot" so the Items step falls back to a live rate
+                // lookup for these rather than pinning to a meaningless 0.
+                goldRate: it.goldRate > 0 ? it.goldRate : null,
+                pledgeRate: it.pledgeRate > 0 ? it.pledgeRate : null,
+                itemValue: it.itemValue > 0 ? it.itemValue : null,
               ))
           .toList(),
       photos: goldPhotos,
@@ -226,12 +249,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
 
   @override
   void dispose() {
-    _grossWeightCtrl.dispose();
-    _netWeightCtrl.dispose();
-    _pledgeRateCtrl.dispose();
     _pledgeNoCtrl.dispose();
     _loanAmtCtrl.dispose();
-    _netFocus.dispose();
     _loanAmtFocus.dispose();
     _cashCtrl.dispose();
     _bankCtrl.dispose();
@@ -241,13 +260,11 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
 
   Future<void> _loadDefaults() async {
     if (widget.editMode) return;
-    final rates = await GoldRatesRepository.instance.getCurrentRates();
+    final purityRates = await _loadPurityRates();
     final nextPledgeNo = await PledgeRepository.instance.nextPledgeNumber();
     if (mounted) {
       setState(() {
-        _pledgeRateCtrl.text =
-            formatIndian((rates?.pledgeRate ?? 0).round().toString());
-        _goldRate = rates?.goldRate ?? 0;
+        _purityRatesByName = purityRates;
         if (_pledgeNoCtrl.text.trim().isEmpty) {
           _pledgeNoCtrl.text = nextPledgeNo;
         }
@@ -296,31 +313,41 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     });
   }
 
-  // ── Step 1: proceed ──────────────────────────────────────────────────────────
+  // ── Step 1: Items — proceed ──────────────────────────────────────────────────
 
-  Future<void> _proceedFromStep1() async {
-    final gw = double.tryParse(_grossWeightCtrl.text.trim());
-    final nw = double.tryParse(_netWeightCtrl.text.trim());
-    final pr =
-        double.tryParse(_pledgeRateCtrl.text.trim().replaceAll(',', ''));
+  void _proceedFromStep1() {
+    final validationError = _itemsKey.currentState?.validate();
+    if (validationError != null) {
+      _showError(validationError);
+      return;
+    }
+    final data = _itemsKey.currentState?.getData();
+    if (data == null || data.items.isEmpty) {
+      _showError('Add at least one item before proceeding.');
+      return;
+    }
+    for (var i = 0; i < data.items.length; i++) {
+      final e = data.items[i];
+      final purity = e.purity;
+      if (purity == null || purity.isEmpty) {
+        _showError(
+            'Item List ${i + 1}: select a gold purity before proceeding.');
+        return;
+      }
+      if ((e.pledgeRate ?? 0) <= 0) {
+        _showError(
+            'Item List ${i + 1}: enter a pledge rate for "$purity" before '
+            'proceeding.');
+        return;
+      }
+    }
+    _capturedItems = data;
+    _advanceTo(2);
+  }
 
-    if (gw == null || gw <= 0) {
-      _showError('Enter a valid gross weight (grams).');
-      return;
-    }
-    if (nw == null || nw <= 0) {
-      _showError('Enter a valid net weight (grams).');
-      return;
-    }
-    if (nw > gw) {
-      _showError('Net weight cannot exceed gross weight.');
-      return;
-    }
-    if (pr == null || pr <= 0) {
-      _showError('Enter a valid pledge rate per gram.');
-      return;
-    }
+  // ── Step 2: Pledge Basics — proceed ──────────────────────────────────────────
 
+  Future<void> _proceedFromStep2() async {
     if (!widget.editMode) {
       if (_pledgeNoCtrl.text.trim().isEmpty) {
         final next = await PledgeRepository.instance.nextPledgeNumber();
@@ -339,7 +366,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
       _loanAmtCtrl.text = formatIndian(_maxPledgeValue.round().toString());
     }
 
-    _advanceTo(2);
+    _advanceTo(3);
   }
 
   // ── Pledge number check ───────────────────────────────────────────────────────
@@ -428,6 +455,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                 netWeight: e.netWeight,
                 quantity: e.quantity,
                 purity: e.purity ?? '',
+                pledgeRate: e.pledgeRate ?? 0,
+                goldRate: e.goldRate ?? 0,
+                itemValue: e.itemValue ?? (e.netWeight * (e.pledgeRate ?? 0)),
                 notes: e.notes,
                 createdAt: now.toIso8601String(),
               ))
@@ -558,7 +588,8 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
             Expanded(
               child: ListView(
                 controller: _scrollCtrl,
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 40)
+                    .withNavBarInset(context),
                 children: [
                   if (_step == 1) _buildStep1(),
                   if (_step == 2) _buildStep2(),
@@ -574,15 +605,39 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
     );
   }
 
-  // ─── Step 1: Gold & Loan Details ────────────────────────────────────────────
+  // ─── Step 1: Item Details (shared widget) ────────────────────────────────────
 
   Widget _buildStep1() {
-    final step1ReadOnly = widget.editMode &&
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (widget.contextDate != null)
+          ContextDateBanner(label: 'Pledge Date', date: widget.contextDate!),
+        SharedItemDetailsStep(
+          key: _itemsKey,
+          // Items are the source of truth for weights now — there is no
+          // separate reference total to reconcile against.
+          grossWeight: 0,
+          netWeight: 0,
+          initialData: _capturedItems,
+          pledgeNumber: _pledgeNoCtrl.text.trim(),
+          purityRates: _purityRatesByName,
+        ),
+        const SizedBox(height: 20),
+        _proceedBtn(_proceedFromStep1),
+      ],
+    );
+  }
+
+  // ─── Step 2: Pledge Basics (derived from Step 1's items) ────────────────────
+
+  Widget _buildStep2() {
+    final step2ReadOnly = widget.editMode &&
         widget.existingPledge?.renewalParentId != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (step1ReadOnly)
+        if (step2ReadOnly)
           Container(
             padding: const EdgeInsets.all(12),
             margin: const EdgeInsets.only(bottom: 14),
@@ -597,76 +652,40 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Step 1 details are read-only — this pledge was created from a renewal or loan increase and its details cannot be changed.',
+                    'Pledge number and loan amount are read-only — this pledge was created from a renewal or loan increase and cannot be changed.',
                     style: TextStyle(fontSize: 13, color: FlowColors.orange),
                   ),
                 ),
               ],
             ),
           ),
-        if (widget.contextDate != null)
-          ContextDateBanner(label: 'Pledge Date', date: widget.contextDate!),
         const _SectionHeader('Gold Details'),
-        _decimalField('Gross Weight (grams)', _grossWeightCtrl,
-            readOnly: step1ReadOnly,
-            textInputAction: TextInputAction.next,
-            onSubmitted: (_) => _netFocus.requestFocus()),
-        _decimalField('Net Weight (grams)', _netWeightCtrl,
-            focusNode: _netFocus,
-            readOnly: step1ReadOnly,
-            textInputAction: TextInputAction.next,
-            onSubmitted: (_) => _loanAmtFocus.requestFocus()),
-        _numberField('Pledge Rate (₹/gram)', _pledgeRateCtrl,
-            suffixText: '/g',
-            indianFormat: true,
-            readOnly: step1ReadOnly,
-            textInputAction: TextInputAction.next,
-            onSubmitted: (_) => FocusScope.of(context).nextFocus()),
-        FlowCard(
-          backgroundColor: FlowColors.accent,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CardLabel('MAX PLEDGE VALUE'),
-              Text(
-                money(_maxPledgeValue),
-                style: const TextStyle(
-                    color: FlowColors.primary,
-                    fontSize: 30,
-                    fontWeight: FontWeight.bold),
-              ),
-              Text(
-                '${_netWeight.toStringAsFixed(2)} g × ${money(_pledgeRate)}/g',
-                style: const TextStyle(
-                    color: FlowColors.medText, fontSize: 14),
-              ),
-            ],
-          ),
-        ),
+        _lockedStat('Gross Weight (grams)', _grossWeight.toStringAsFixed(2)),
+        _lockedStat('Net Weight (grams)', _netWeight.toStringAsFixed(2)),
         const _SectionHeader('Pledge Number'),
         Padding(
           padding: const EdgeInsets.only(bottom: 4),
           child: TextField(
             controller: _pledgeNoCtrl,
-            readOnly: step1ReadOnly,
+            readOnly: step2ReadOnly,
             keyboardType: TextInputType.number,
             textInputAction: TextInputAction.next,
-            inputFormatters: step1ReadOnly
+            inputFormatters: step2ReadOnly
                 ? []
                 : [FilteringTextInputFormatter.digitsOnly],
             style: const TextStyle(fontSize: 18),
             decoration: InputDecoration(
               labelText: 'Pledge Number',
-              prefixIcon: Icon(step1ReadOnly ? Icons.lock : Icons.tag),
+              prefixIcon: Icon(step2ReadOnly ? Icons.lock : Icons.tag),
               errorText: _pledgeNoError
                   ? 'This pledge number already exists'
                   : null,
             ),
-            onChanged: step1ReadOnly
+            onChanged: step2ReadOnly
                 ? null
                 : (_) => setState(() => _pledgeNoError = false),
-            onEditingComplete: step1ReadOnly ? null : _checkPledgeNo,
-            onSubmitted: step1ReadOnly
+            onEditingComplete: step2ReadOnly ? null : _checkPledgeNo,
+            onSubmitted: step2ReadOnly
                 ? null
                 : (_) => FocusScope.of(context).nextFocus(),
           ),
@@ -674,7 +693,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         Padding(
           padding: const EdgeInsets.only(bottom: 16),
           child: Text(
-            step1ReadOnly
+            step2ReadOnly
                 ? 'Pledge number cannot be changed.'
                 : 'Auto-filled. Edit if needed.',
             style: const TextStyle(color: Colors.black54, fontSize: 13),
@@ -685,29 +704,45 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
             focusNode: _loanAmtFocus,
             prefixText: '₹ ',
             indianFormat: true,
-            readOnly: step1ReadOnly,
+            readOnly: step2ReadOnly,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => FocusScope.of(context).unfocus()),
         Padding(
           padding: const EdgeInsets.only(bottom: 24),
           child: Text(
-            step1ReadOnly
+            step2ReadOnly
                 ? 'Loan amount cannot be changed.'
                 : 'Max: ${money(_maxPledgeValue)}. Can be lower.',
             style: const TextStyle(color: Colors.black54, fontSize: 13),
           ),
         ),
-        _proceedBtn(_proceedFromStep1),
+        _proceedBtn(() => _proceedFromStep2()),
       ],
     );
   }
 
-  // ─── Step 2: Customer Details (shared widget) ────────────────────────────────
+  /// A read-only, derived value shown in the same visual style as an input
+  /// field (label + lock icon) without needing a TextEditingController.
+  Widget _lockedStat(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: const Icon(Icons.lock_outline,
+              size: 18, color: Colors.black38),
+        ),
+        child: Text(value, style: const TextStyle(fontSize: 18)),
+      ),
+    );
+  }
 
-  Widget _buildStep2() {
+  // ─── Step 3: Customer Details (shared widget) ────────────────────────────────
+
+  Widget _buildStep3() {
     void skip() {
       _capturedCustomer = _customerKey.currentState?.getData();
-      _advanceTo(3);
+      _advanceTo(4);
     }
 
     void proceed() {
@@ -717,7 +752,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         return;
       }
       _capturedCustomer = _customerKey.currentState?.getData();
-      _advanceTo(3);
+      _advanceTo(4);
     }
 
     return Column(
@@ -730,58 +765,6 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         ),
         const SizedBox(height: 20),
         _skipProceedRow(skip, proceed),
-      ],
-    );
-  }
-
-  // ─── Step 3: Item Details (shared widget) ────────────────────────────────────
-
-  Widget _buildStep3() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SharedItemDetailsStep(
-          key: _itemsKey,
-          grossWeight: _grossWeight,
-          netWeight: _netWeight,
-          initialData: _capturedItems,
-          pledgeNumber: _pledgeNoCtrl.text.trim(),
-        ),
-        const SizedBox(height: 20),
-        _skipProceedRow(
-          () {
-            _capturedItems = _itemsKey.currentState?.getData();
-            _advanceTo(4);
-          },
-          () {
-            final validationError = _itemsKey.currentState?.validate();
-            if (validationError != null) {
-              _showError(validationError);
-              return;
-            }
-            final data = _itemsKey.currentState?.getData();
-            if (data != null && data.items.isNotEmpty) {
-              final totalGross =
-                  data.items.fold(0.0, (s, e) => s + e.grossWeight);
-              final totalNet =
-                  data.items.fold(0.0, (s, e) => s + e.netWeight);
-              if (_grossWeight > 0 &&
-                  (_grossWeight - totalGross).abs() > 0.001) {
-                _showError(
-                    'Gross weight total (${totalGross.toStringAsFixed(2)}g) must match ${_grossWeight.toStringAsFixed(2)}g.');
-                return;
-              }
-              if (_netWeight > 0 &&
-                  (_netWeight - totalNet).abs() > 0.001) {
-                _showError(
-                    'Net weight total (${totalNet.toStringAsFixed(2)}g) must match ${_netWeight.toStringAsFixed(2)}g.');
-                return;
-              }
-            }
-            _capturedItems = data;
-            _advanceTo(4);
-          },
-        ),
       ],
     );
   }
@@ -866,7 +849,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         // Loan
         _summarySection(
           title: 'LOAN',
-          onEdit: () => setState(() => _step = 1),
+          onEdit: () => setState(() => _step = 2),
           children: [
             _summaryRow('Pledge No.', '#${_pledgeNoCtrl.text}',
                 highlight: true),
@@ -892,7 +875,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         // Customer
         _summarySection(
           title: 'CUSTOMER',
-          onEdit: () => setState(() => _step = 2),
+          onEdit: () => setState(() => _step = 3),
           children: customer != null && customer.name.isNotEmpty
               ? [
                   if (customer.phone.isNotEmpty)
@@ -924,7 +907,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         // Items
         _summarySection(
           title: 'ITEMS',
-          onEdit: () => setState(() => _step = 3),
+          onEdit: () => setState(() => _step = 1),
           children: itemData != null && itemData.items.isNotEmpty
               ? [
                   ...List.generate(itemData.items.length, (i) {
@@ -1060,26 +1043,34 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
           ],
         ),
 
-        // Gold & Loan
+        // Loan (pledge number, date, loan amount — Step 2)
         _summarySection(
-          title: 'GOLD & LOAN',
-          onEdit: () => setState(() => _step = 1),
+          title: 'LOAN',
+          onEdit: () => setState(() => _step = 2),
           children: [
             _summaryRow('Pledge No.', '#${p.pledgeNumber}', highlight: true),
             _summaryRow('Date', isoToDisplay(p.pledgeDate)),
+            _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
+          ],
+        ),
+
+        // Gold (weights, rate — derived from Step 1's items)
+        _summarySection(
+          title: 'GOLD',
+          onEdit: () => setState(() => _step = 1),
+          children: [
             _summaryRow(
                 'Gross Weight', '${_grossWeight.toStringAsFixed(2)} g'),
             _summaryRow(
                 'Net Weight', '${_netWeight.toStringAsFixed(2)} g'),
             _summaryRow('Pledge Rate', '${money(_pledgeRate)}/g'),
-            _summaryRow('Loan Amount', money(_loanAmount), highlight: true),
           ],
         ),
 
         // Customer
         _summarySection(
           title: 'CUSTOMER',
-          onEdit: () => setState(() => _step = 2),
+          onEdit: () => setState(() => _step = 3),
           children: customer != null && customer.name.isNotEmpty
               ? [
                   if (customer.phone.isNotEmpty)
@@ -1111,7 +1102,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         // Items
         _summarySection(
           title: 'ITEMS',
-          onEdit: () => setState(() => _step = 3),
+          onEdit: () => setState(() => _step = 1),
           children: itemData != null && itemData.items.isNotEmpty
               ? [
                   ...List.generate(itemData.items.length, (i) {
@@ -1289,6 +1280,9 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
                 netWeight: e.netWeight,
                 quantity: e.quantity,
                 purity: e.purity ?? '',
+                pledgeRate: e.pledgeRate ?? 0,
+                goldRate: e.goldRate ?? 0,
+                itemValue: e.itemValue ?? (e.netWeight * (e.pledgeRate ?? 0)),
                 notes: e.notes,
                 createdAt: now.toIso8601String(),
               ))
@@ -1321,7 +1315,7 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
         netWeight: _netWeight,
         goldRate: _goldRate,
         pledgeRate: _pledgeRate,
-        actualItemValue: _goldRate * _netWeight,
+        actualItemValue: _actualItemValue,
         renewalParentId: existingPledge.renewalParentId,
         renewType: existingPledge.renewType,
         renewSubtype: existingPledge.renewSubtype,
@@ -1478,43 +1472,6 @@ class _NewPledgeScreenState extends State<NewPledgeScreen> {
 
   // ─── Field helpers ────────────────────────────────────────────────────────────
 
-  Widget _decimalField(
-    String label,
-    TextEditingController ctrl, {
-    bool dense = false,
-    VoidCallback? onChanged,
-    TextInputAction? textInputAction,
-    ValueChanged<String>? onSubmitted,
-    FocusNode? focusNode,
-    bool readOnly = false,
-  }) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: dense ? 10 : 14),
-      child: TextField(
-        controller: ctrl,
-        focusNode: focusNode,
-        readOnly: readOnly,
-        keyboardType:
-            const TextInputType.numberWithOptions(decimal: true),
-        textInputAction: textInputAction,
-        onSubmitted: onSubmitted,
-        inputFormatters: readOnly
-            ? []
-            : [FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))],
-        style: TextStyle(fontSize: dense ? 16 : 18),
-        onChanged: onChanged != null ? (_) => onChanged() : null,
-        decoration: InputDecoration(
-          labelText: label,
-          isDense: dense,
-          suffixIcon: readOnly
-              ? const Icon(Icons.lock_outline,
-                  size: 18, color: Colors.black38)
-              : null,
-        ),
-      ),
-    );
-  }
-
   Widget _numberField(
     String label,
     TextEditingController ctrl, {
@@ -1608,7 +1565,7 @@ class _StepIndicator extends StatelessWidget {
   final int currentStep;
 
   static const _labels = [
-    'Gold', 'Customer', 'Items', 'Payment', 'Review'
+    'Items', 'Pledge Basics', 'Customer', 'Payment', 'Review'
   ];
 
   @override
@@ -1684,24 +1641,6 @@ class _SectionHeader extends StatelessWidget {
               fontSize: 18,
               fontWeight: FontWeight.bold,
               color: FlowColors.primary)),
-    );
-  }
-}
-
-class _CardLabel extends StatelessWidget {
-  const _CardLabel(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Text(text,
-          style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: FlowColors.medText,
-              letterSpacing: 0.5)),
     );
   }
 }
@@ -1789,13 +1728,10 @@ class _SuccessScreen extends StatelessWidget {
   // ─── Print the double-sided pledge form (Form E) ────────────────────────────
 
   Future<void> _printForm(BuildContext context) async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
+    // Only pledgeNo is in scope here — resolve the pledge id, then hand off to
+    // the shared Pledge Form print flow.
+    final int pledgeId;
     try {
-      // Only pledgeNo is in scope here — resolve the pledge id.
       final db = await AppDatabase.instance.database;
       final rows = await db.query('pledges',
           columns: ['id'],
@@ -1803,69 +1739,18 @@ class _SuccessScreen extends StatelessWidget {
           whereArgs: [pledgeNo],
           limit: 1);
       if (rows.isEmpty) throw StateError('Pledge $pledgeNo not found.');
-      final pledgeId = rows.first['id'] as int;
-
-      final doc = await PledgeFormPrintReport.generate(pledgeId);
-      if (!context.mounted) return;
-      Navigator.pop(context); // dismiss loader
-      _showPrintSheet(context, doc);
+      pledgeId = rows.first['id'] as int;
     } catch (e) {
       if (!context.mounted) return;
-      Navigator.pop(context); // dismiss loader
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not generate pledge form: $e')),
       );
+      return;
     }
-  }
 
-  void _showPrintSheet(BuildContext context, pw.Document doc) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                    color: Colors.black26,
-                    borderRadius: BorderRadius.circular(2))),
-            const SizedBox(height: 8),
-            Text('Pledge Form — #$pledgeNo',
-                style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: FlowColors.primary)),
-            ListTile(
-              leading: const Icon(Icons.print, color: FlowColors.primary),
-              title: const Text('Print'),
-              onTap: () {
-                Navigator.pop(ctx);
-                PrintService.printDocument(
-                    pdf: doc, documentName: 'PledgeForm_$pledgeNo');
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.save_alt, color: FlowColors.primary),
-              title: const Text('Save as PDF'),
-              onTap: () {
-                Navigator.pop(ctx);
-                PrintService.saveAsPdf(
-                    pdf: doc,
-                    fileName: 'PledgeForm_$pledgeNo.pdf',
-                    context: context);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
+    if (!context.mounted) return;
+    await showPledgeFormPrintOptions(context,
+        pledgeId: pledgeId, pledgeNo: pledgeNo);
   }
 }
 

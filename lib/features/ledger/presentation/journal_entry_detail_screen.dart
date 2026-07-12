@@ -155,7 +155,8 @@ class _JournalEntryDetailScreenState extends State<JournalEntryDetailScreen> {
                       style:
                           TextStyle(fontSize: 16, color: Colors.black45)))
               : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 32)
+                      .withNavBarInset(context),
                   children: [
                     if (_entry!.isReversed) _reversedBanner(),
                     _headerCard(),

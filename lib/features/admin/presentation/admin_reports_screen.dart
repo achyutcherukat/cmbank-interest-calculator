@@ -143,8 +143,8 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
                     : RefreshIndicator(
                         onRefresh: _load,
                         child: ListView(
-                          padding:
-                              const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 40)
+                              .withNavBarInset(context),
                           children: [
                             _periodChip(),
                             _pledgeSummaryCard(),

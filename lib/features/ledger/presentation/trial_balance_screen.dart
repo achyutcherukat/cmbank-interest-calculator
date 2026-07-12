@@ -264,7 +264,8 @@ class _TrialBalanceScreenState extends State<TrialBalanceScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 32)
+                  .withNavBarInset(context),
               children: [
                 if (!_openingPosted)
                   OpeningBalancePendingBanner(

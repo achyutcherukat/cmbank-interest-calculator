@@ -549,7 +549,8 @@ class _EditTransactionScreenState extends State<EditTransactionScreen> {
               color: Colors.white,
               borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
             ),
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+            padding:
+                const EdgeInsets.fromLTRB(20, 16, 20, 28).withNavBarInset(ctx),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -626,7 +627,10 @@ class _EditTransactionScreenState extends State<EditTransactionScreen> {
                     decoration: const InputDecoration(
                         labelText: 'Notes (optional)',
                         border: OutlineInputBorder()),
-                    maxLines: 2,
+                    keyboardType: TextInputType.text,
+                    textInputAction: TextInputAction.done,
+                    minLines: 1,
+                    maxLines: null,
                   ),
                   const SizedBox(height: 14),
                   TextField(
@@ -636,7 +640,10 @@ class _EditTransactionScreenState extends State<EditTransactionScreen> {
                       hintText: 'e.g. "Wrong category selected"',
                       border: OutlineInputBorder(),
                     ),
-                    maxLines: 2,
+                    keyboardType: TextInputType.text,
+                    textInputAction: TextInputAction.done,
+                    minLines: 1,
+                    maxLines: null,
                     onChanged: (_) {
                       if (error != null) setBS(() => error = null);
                     },
@@ -856,7 +863,7 @@ class _EditTransactionScreenState extends State<EditTransactionScreen> {
                   ),
                 )
               : ListView(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(16).withNavBarInset(context),
                   children: [
                     const FlowNoticeBox(
                       text:
@@ -964,10 +971,15 @@ class _EditTransactionScreenState extends State<EditTransactionScreen> {
                               child: ElevatedButton.icon(
                                 onPressed: _proceed,
                                 icon: const Icon(Icons.edit, size: 20),
-                                label: const Text('PROCEED TO EDIT',
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.bold)),
+                                label: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: const Text('PROCEED TO EDIT',
+                                      maxLines: 1,
+                                      softWrap: false,
+                                      style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.bold)),
+                                ),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: FlowColors.primary,
                                   foregroundColor: FlowColors.goldRich,
@@ -1166,7 +1178,8 @@ class _EditPartnerSheetState extends State<_EditPartnerSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28)
+            .withNavBarInset(context),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1282,7 +1295,10 @@ class _EditPartnerSheetState extends State<_EditPartnerSheet> {
                 decoration: const InputDecoration(
                     labelText: 'Notes (optional)',
                     border: OutlineInputBorder()),
-                maxLines: 2,
+                keyboardType: TextInputType.text,
+                textInputAction: TextInputAction.done,
+                minLines: 1,
+                maxLines: null,
               ),
               const SizedBox(height: 14),
               TextField(
@@ -1292,7 +1308,10 @@ class _EditPartnerSheetState extends State<_EditPartnerSheet> {
                   hintText: 'e.g. "Wrong amount entered"',
                   border: OutlineInputBorder(),
                 ),
-                maxLines: 2,
+                keyboardType: TextInputType.text,
+                textInputAction: TextInputAction.done,
+                minLines: 1,
+                maxLines: null,
                 onChanged: (_) {
                   if (_error != null) setState(() => _error = null);
                 },

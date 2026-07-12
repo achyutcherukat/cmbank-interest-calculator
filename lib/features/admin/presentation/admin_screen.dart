@@ -88,7 +88,7 @@ class _AdminScreenState extends State<AdminScreen> {
       ),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(28),
+          padding: const EdgeInsets.all(28).withNavBarInset(context),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

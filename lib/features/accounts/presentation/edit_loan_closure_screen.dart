@@ -310,7 +310,7 @@ class _EditLoanClosureScreenState extends State<EditLoanClosureScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16).withNavBarInset(context),
               children: [
                 // ── Context (read-only) ────────────────────────────────────
                 FlowCard(

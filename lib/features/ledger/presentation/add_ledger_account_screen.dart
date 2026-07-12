@@ -245,7 +245,8 @@ class _AddLedgerAccountScreenState extends State<AddLedgerAccountScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32)
+                  .withNavBarInset(context),
               children: [
                 _addForm(),
                 const SizedBox(height: 16),

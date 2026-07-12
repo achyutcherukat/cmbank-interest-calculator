@@ -356,7 +356,8 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                 : RefreshIndicator(
                     onRefresh: _loadData,
                     child: ListView(
-                      padding: const EdgeInsets.all(16),
+                      padding:
+                          const EdgeInsets.all(16).withNavBarInset(context),
                       children: [
                         _buildOpeningCard(),
                         const SizedBox(height: 12),
@@ -370,112 +371,53 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                               Expanded(
                                 child: RestrictedAction(
                                   child: SizedBox(
-                                  height: 54,
-                                  child: ElevatedButton.icon(
-                                    onPressed: () async {
-                                      await Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => AdjustBalanceScreen(
-                                              date: _selectedDate),
-                                        ),
-                                      );
-                                      _loadData();
-                                    },
-                                    icon: const Icon(Icons.tune, size: 18),
-                                    label: const Text('ADJUST BALANCE',
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold)),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: FlowColors.primaryLight,
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(10)),
+                                    height: 54,
+                                    child: ElevatedButton.icon(
+                                      onPressed: _showAdjustMenu,
+                                      icon: const Icon(Icons.tune, size: 20),
+                                      label: const Text('ADJUST',
+                                          style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.bold)),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            FlowColors.primaryLight,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(10)),
+                                      ),
                                     ),
                                   ),
-                                ),
                                 ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: RestrictedAction(
                                   child: SizedBox(
-                                  height: 54,
-                                  child: ElevatedButton.icon(
-                                    onPressed: _showAddExpense,
-                                    icon: const Icon(Icons.receipt_long,
-                                        size: 18),
-                                    label: const Text('ADD EXPENSE',
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold)),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: FlowColors.primaryLight,
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(10)),
+                                    height: 54,
+                                    child: ElevatedButton.icon(
+                                      onPressed: _showAddMenu,
+                                      icon: const Icon(
+                                          Icons.add_circle_outline,
+                                          size: 20),
+                                      label: const Text('ADD',
+                                          style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.bold)),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            FlowColors.primaryLight,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(10)),
+                                      ),
                                     ),
                                   ),
                                 ),
-                                ),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 10),
-                          RestrictedAction(
-                            child: SizedBox(
-                              height: 54,
-                              width: double.infinity,
-                              child: ElevatedButton.icon(
-                                onPressed: () async {
-                                  await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => PartnerTransactionScreen(
-                                          date: _selectedDate),
-                                    ),
-                                  );
-                                  _loadData();
-                                },
-                                icon: const Icon(Icons.group, size: 18),
-                                label: const Text('PARTNER TRANSACTION',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: FlowColors.primaryLight,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(10)),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          RestrictedAction(
-                            child: SizedBox(
-                              height: 54,
-                              width: double.infinity,
-                              child: ElevatedButton.icon(
-                                onPressed: _showEditTransaction,
-                                icon: const Icon(Icons.edit, size: 18),
-                                label: const Text('EDIT TRANSACTION',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: FlowColors.primaryLight,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(10)),
-                                ),
-                              ),
-                            ),
                           ),
                           const SizedBox(height: 10),
                           RestrictedAction(
@@ -939,6 +881,151 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
     );
   }
 
+  // ─── Grouped action menus (Adjust / Add) ────────────────────────────────────
+
+  void _showAdjustMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 8),
+            const Text('Adjust',
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.primary)),
+            _sheetOption(
+              icon: Icons.tune,
+              label: 'Adjust Balance',
+              onTap: () {
+                Navigator.pop(ctx);
+                _showAdjustBalance();
+              },
+            ),
+            _sheetOption(
+              icon: Icons.edit,
+              label: 'Edit Transaction',
+              onTap: () {
+                Navigator.pop(ctx);
+                _showEditTransaction();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 8),
+            const Text('Add',
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: FlowColors.primary)),
+            _sheetOption(
+              icon: Icons.receipt_long,
+              label: 'Add Expense',
+              onTap: () {
+                Navigator.pop(ctx);
+                _showAddExpense();
+              },
+            ),
+            _sheetOption(
+              icon: Icons.group,
+              label: 'Partner Transaction',
+              onTap: () {
+                Navigator.pop(ctx);
+                _showPartnerTransaction();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Option row used inside the Adjust/Add bottom sheets. Sized to the app's
+  /// elderly-friendly minimums (58px touch target, 18sp label).
+  Widget _sheetOption({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 58),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, color: FlowColors.primary, size: 24),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(label,
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: FlowColors.darkText)),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.black38),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAdjustBalance() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AdjustBalanceScreen(date: _selectedDate),
+      ),
+    );
+    _loadData();
+  }
+
+  Future<void> _showPartnerTransaction() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PartnerTransactionScreen(date: _selectedDate),
+      ),
+    );
+    _loadData();
+  }
+
   // ─── Add Expense ──────────────────────────────────────────────────────────
 
   Future<void> _showAddExpense() async {
@@ -987,7 +1074,8 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
               borderRadius:
                   BorderRadius.vertical(top: Radius.circular(20)),
             ),
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+            padding:
+                const EdgeInsets.fromLTRB(20, 16, 20, 28).withNavBarInset(ctx),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1055,7 +1143,10 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                     decoration: const InputDecoration(
                         labelText: 'Notes (optional)',
                         border: OutlineInputBorder()),
-                    maxLines: 2,
+                    keyboardType: TextInputType.text,
+                    textInputAction: TextInputAction.done,
+                    minLines: 1,
+                    maxLines: null,
                   ),
                   if (error != null) ...[
                     const SizedBox(height: 10),
@@ -1259,7 +1350,9 @@ class _DailyAccountsScreenState extends State<DailyAccountsScreen> {
                   Navigator.pop(ctx);
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const GoldStockScreen()),
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            GoldStockScreen(initialDate: _selectedDate)),
                   ).then((_) => _loadData());
                 },
                 child: Container(
@@ -1817,7 +1910,7 @@ class _MoneyInScreenState extends State<_MoneyInScreen> {
                         style: TextStyle(
                             color: Colors.black54, fontSize: 16)))
                 : ListView(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(16).withNavBarInset(context),
                     children: [
                       if (_adjustments.isNotEmpty) ...[
                         _sectionLabel('Adjustments'),
@@ -2135,7 +2228,7 @@ class _MoneyOutScreenState extends State<_MoneyOutScreen> {
                         style: TextStyle(
                             color: Colors.black54, fontSize: 16)))
                 : ListView(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(16).withNavBarInset(context),
                     children: [
                       if (_loans.isNotEmpty) ...[
                         _sectionLabel('Loans Disbursed'),
@@ -2466,7 +2559,7 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           FlowCard(
             backgroundColor: FlowColors.accent,
@@ -2506,7 +2599,7 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
                   keyboardType: TextInputType.number,
                   inputFormatters: [IndianNumberFormatter()],
                   decoration: const InputDecoration(
-                      labelText: 'Actual UPI Balance (₹)',
+                      labelText: 'Actual Bank Balance (₹)',
                       prefixText: '₹ ',
                       border: OutlineInputBorder()),
                   onChanged: (_) => setState(() {}),
@@ -2524,7 +2617,7 @@ class _ReconcileScreenState extends State<_ReconcileScreen> {
                 FlowCardTitle(
                     _isMatch ? 'Balances Match ✓' : 'Mismatch Detected'),
                 _diffRow('Cash Difference', _cashDiff),
-                _diffRow('UPI Difference', _upiDiff, isLast: true),
+                _diffRow('Bank Difference', _upiDiff, isLast: true),
               ],
             ),
           ),

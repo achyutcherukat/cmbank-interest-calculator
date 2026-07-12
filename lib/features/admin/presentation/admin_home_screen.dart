@@ -67,7 +67,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
+        padding:
+            const EdgeInsets.fromLTRB(16, 20, 16, 40).withNavBarInset(context),
         children: [
           // Role banner
           Container(

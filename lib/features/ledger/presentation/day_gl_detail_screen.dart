@@ -57,7 +57,8 @@ class DayGlDetailScreen extends StatelessWidget {
       rows.add(_lineRow(context, line, running));
     }
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+      padding:
+          const EdgeInsets.fromLTRB(16, 14, 16, 32).withNavBarInset(context),
       children: [
         FlowCard(
           padding: const EdgeInsets.all(0),

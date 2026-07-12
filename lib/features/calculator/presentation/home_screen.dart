@@ -13,6 +13,8 @@ import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/restricted_action.dart';
 import '../../accounts/data/daily_balance_repository.dart';
 import '../../accounts/presentation/daily_accounts_screen.dart';
+import '../../admin/data/lookup_type.dart';
+import '../../admin/data/purity_types_repository.dart';
 import '../../gold_stock/data/gold_rates_repository.dart';
 import '../../customers/presentation/customer_list_screen.dart';
 import '../../gold_stock/presentation/gold_stock_screen.dart';
@@ -45,8 +47,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  double  _goldRate   = 0;
-  double  _pledgeRate = 0;
+  List<LookupType> _purityTypes = [];
+  Map<int, ({double? goldRate, double pledgeRate})> _purityRates = {};
+  bool _ratesExpanded = false;
   double  _todayCash  = 0;
   double  _todayUpi   = 0;
 
@@ -121,11 +124,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ─── Data loaders ──────────────────────────────────────────────────────────
 
   Future<void> _loadSettings() async {
-    final rates = await GoldRatesRepository.instance.getCurrentRates();
+    final purities = (await PurityTypesRepository.instance.getAllPurityTypes())
+        .where((p) => p.isActive)
+        .toList();
+    final rates = await GoldRatesRepository.instance.getCurrentRatesByPurity();
     if (mounted) {
       setState(() {
-        _goldRate   = rates?.goldRate ?? 0;
-        _pledgeRate = rates?.pledgeRate ?? 0;
+        _purityTypes = purities;
+        _purityRates = rates;
       });
     }
   }
@@ -255,7 +261,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ─── Rate edit bottom sheet ───────────────────────────────────────────────
 
-  void _showRateSheet(String title, double current, String settingsKey) {
+  void _showRateSheet(
+    String title,
+    double current, {
+    required int purityTypeId,
+    required bool isGold,
+  }) {
     final ctrl = TextEditingController(
         text: current > 0 ? formatIndian(current.round().toString()) : '');
     showModalBottomSheet(
@@ -270,7 +281,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       builder: (ctx) => Padding(
         padding: EdgeInsets.fromLTRB(
-            24, 20, 24, MediaQuery.of(ctx).viewInsets.bottom + 32),
+                24, 20, 24, MediaQuery.of(ctx).viewInsets.bottom + 32)
+            .withNavBarInset(ctx),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,20 +354,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       final val = double.tryParse(raw);
                       if (val == null || val <= 0) return;
                       Navigator.of(ctx).pop();
-                      final isGold = settingsKey == 'gold_rate';
-                      // Append a new gold_rates row (rates are never updated
-                      // in place); keep the other rate at its current value.
-                      await GoldRatesRepository.instance.saveRates(
-                        goldRate: isGold ? val : _goldRate,
-                        pledgeRate: isGold ? _pledgeRate : val,
+                      // Append a new gold_rates row scoped to this purity
+                      // (rates are never updated in place); keep the other
+                      // rate at its current value for this same purity.
+                      final existing = _purityRates[purityTypeId];
+                      final newGoldRate =
+                          isGold ? val : existing?.goldRate;
+                      final newPledgeRate =
+                          isGold ? (existing?.pledgeRate ?? 0.0) : val;
+                      await GoldRatesRepository.instance.saveRateForPurity(
+                        purityTypeId: purityTypeId,
+                        goldRate: newGoldRate,
+                        pledgeRate: newPledgeRate,
                       );
                       if (mounted) {
                         setState(() {
-                          if (isGold) {
-                            _goldRate = val;
-                          } else {
-                            _pledgeRate = val;
-                          }
+                          _purityRates[purityTypeId] = (
+                            goldRate: newGoldRate,
+                            pledgeRate: newPledgeRate,
+                          );
                         });
                       }
                     },
@@ -435,7 +452,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               color: _gold,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80)
+                    .withNavBarInset(context),
                 child: Column(
                   children: [
                     _ratesCard(),
@@ -605,6 +623,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ─── Rates card ──────────────────────────────────────────────────────────
 
+  /// Collapsed: one compact "PURITY ₹pledge-rate/g" summary per active purity
+  /// type (pledge rate is the number staff quote all day, so that's what the
+  /// closed card leads with). Tapping expands the card into one editable
+  /// Gold rate / Pledge rate row per purity (see [_purityRateRow]), reusing
+  /// the existing tap-to-edit bottom sheet, scoped to that purity's own
+  /// `gold_rates` rows. While expanded the header drops the summary line —
+  /// the detail rows right below it already show everything.
   Widget _ratesCard() {
     return Container(
       decoration: BoxDecoration(
@@ -618,54 +643,194 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               offset: const Offset(0, 2)),
         ],
       ),
-      padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("TODAY'S RATES",
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: _gold,
-                  letterSpacing: 1.2)),
-          const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: RestrictedAction(
-                  child: _rateCol(
-                    iconData: Icons.monetization_on,
-                    label: 'Gold rate',
-                    value: _goldRate,
-                    onEdit: () => _showRateSheet(
-                        'Edit Gold Rate', _goldRate, 'gold_rate'),
+          GestureDetector(
+            onTap: () => setState(() => _ratesExpanded = !_ratesExpanded),
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 14, 16),
+              child: Row(
+                children: [
+                  Expanded(child: _ratesSummaryLine()),
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: const BoxDecoration(
+                      color: _gdBg8,
+                      shape: BoxShape.circle,
+                    ),
+                    child: AnimatedRotation(
+                      turns: _ratesExpanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child:
+                          const Icon(Icons.keyboard_arrow_down, color: _gold),
+                    ),
                   ),
-                ),
+                ],
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Container(
-                  width: 1,
-                  height: 52,
-                  color: const Color(0x40D4A843),
-                ),
-              ),
-              Expanded(
-                child: RestrictedAction(
-                  child: _rateCol(
-                    iconData: Icons.account_balance,
-                    label: 'Pledge rate',
-                    value: _pledgeRate,
-                    onEdit: () => _showRateSheet('Edit Pledge Rate',
-                        _pledgeRate, 'default_pledge_rate'),
+            ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+            alignment: Alignment.topCenter,
+            child: !_ratesExpanded
+                ? const SizedBox(width: double.infinity)
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                    child: _purityTypes.isEmpty
+                        ? const Text(
+                            'No purity types configured. Add one in Admin.',
+                            style: TextStyle(fontSize: 14, color: _tSec),
+                          )
+                        : Column(
+                            children: [
+                              for (var i = 0; i < _purityTypes.length; i++) ...[
+                                if (i > 0)
+                                  const Divider(
+                                      height: 26, color: Color(0x1AD4A843)),
+                                _purityRateRow(_purityTypes[i]),
+                              ],
+                            ],
+                          ),
                   ),
-                ),
-              ),
-            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _ratesSummaryLine() {
+    final label = Text(
+        _ratesExpanded ? "TODAY'S RATES" : "TODAY'S PLEDGE RATES",
+        style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: _gold,
+            letterSpacing: 1.2));
+    if (_purityTypes.isEmpty || _ratesExpanded) return label;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        label,
+        const SizedBox(height: 6),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text.rich(
+            TextSpan(
+              children: [
+                for (var i = 0; i < _purityTypes.length; i++) ...[
+                  if (i > 0)
+                    const TextSpan(
+                      text: '   |   ',
+                      style: TextStyle(
+                          color: Color(0x66D4A843),
+                          fontWeight: FontWeight.w400),
+                    ),
+                  TextSpan(
+                    text: '${_purityTypes[i].name} ',
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: _tSec),
+                  ),
+                  TextSpan(text: _pledgeSummaryValue(_purityTypes[i])),
+                ],
+              ],
+            ),
+            maxLines: 1,
+            softWrap: false,
+            style: const TextStyle(
+                fontSize: 17, fontWeight: FontWeight.bold, color: _tPrimary),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _pledgeSummaryValue(LookupType purity) {
+    final rate = _purityRates[purity.id]?.pledgeRate ?? 0;
+    return rate > 0 ? '${money(rate)}/g' : 'Not set';
+  }
+
+  /// One purity's editable Gold rate / Pledge rate pair. Uses elderly-friendly
+  /// sizing (min 18sp value text, min 58px tap targets) since this only shows
+  /// once the card is expanded and the user has committed to editing a rate.
+  Widget _purityRateRow(LookupType purity) {
+    final rates = _purityRates[purity.id];
+    final goldRate = rates?.goldRate ?? 0;
+    final pledgeRate = rates?.pledgeRate ?? 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 4,
+              height: 16,
+              decoration: BoxDecoration(
+                color: _gold,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(purity.name,
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: _tPrimary)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: RestrictedAction(
+                child: _rateCol(
+                  iconData: Icons.monetization_on,
+                  label: 'Gold rate',
+                  value: goldRate,
+                  onEdit: () => _showRateSheet(
+                    'Edit ${purity.name} Gold Rate',
+                    goldRate,
+                    purityTypeId: purity.id,
+                    isGold: true,
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Container(
+                width: 1,
+                height: 44,
+                color: const Color(0x40D4A843),
+              ),
+            ),
+            Expanded(
+              child: RestrictedAction(
+                child: _rateCol(
+                  iconData: Icons.account_balance,
+                  label: 'Pledge rate',
+                  value: pledgeRate,
+                  onEdit: () => _showRateSheet(
+                    'Edit ${purity.name} Pledge Rate',
+                    pledgeRate,
+                    purityTypeId: purity.id,
+                    isGold: false,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -675,56 +840,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required double value,
     required VoidCallback onEdit,
   }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: _navy,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(iconData, color: _gold, size: 20),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: GestureDetector(
-            onTap: onEdit,
-            behavior: HitTestBehavior.opaque,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(fontSize: 12, color: _tSec)),
-                const SizedBox(height: 2),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    value > 0 ? '${money(value)}/g' : 'Not set',
-                    maxLines: 1,
-                    softWrap: false,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: value > 0 ? _tPrimary : Colors.black38,
-                      height: 1.1,
+    return GestureDetector(
+      onTap: onEdit,
+      behavior: HitTestBehavior.opaque,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 58),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: _navy,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(iconData, color: _gold, size: 21),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.fade,
+                      style: const TextStyle(fontSize: 13, color: _tSec)),
+                  const SizedBox(height: 2),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      value > 0 ? '${money(value)}/g' : 'Not set',
+                      maxLines: 1,
+                      softWrap: false,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: value > 0 ? _tPrimary : Colors.black38,
+                        height: 1.1,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(6, 8, 2, 8),
+              child: Icon(Icons.edit, color: _gold, size: 20),
+            ),
+          ],
         ),
-        GestureDetector(
-          onTap: onEdit,
-          child: const Padding(
-            padding: EdgeInsets.all(6),
-            child: Icon(Icons.edit, color: _gold, size: 18),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -1079,7 +1248,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: 8)
+                  .withNavBarInset(context),
               children: [
                 _drawerItem(Icons.upload_file, 'Add Existing Loan',
                     () => Navigator.push(

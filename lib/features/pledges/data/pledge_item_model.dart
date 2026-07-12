@@ -13,6 +13,9 @@ class PledgeItemModel {
     this.grossWeight = 0.0,
     required this.netWeight,
     this.purity = '',
+    this.pledgeRate = 0.0,
+    this.goldRate = 0.0,
+    this.itemValue = 0.0,
     this.notes,
     required this.createdAt,
   });
@@ -25,6 +28,13 @@ class PledgeItemModel {
   final double grossWeight; // DB: gross_weight
   final double netWeight; // DB: net_weight
   final String purity; // DB: purity (value from purity_types table)
+  // Per-item rate/value snapshot, resolved from gold_rates (by purity) at the
+  // moment the item was entered. 0 means no snapshot was ever recorded (rows
+  // created before this feature) — callers should not treat 0 as a real
+  // historical rate.
+  final double pledgeRate; // DB: pledge_rate
+  final double goldRate; // DB: gold_rate
+  final double itemValue; // DB: item_value (net_weight × pledge_rate)
   final String? notes; // DB: notes
   final String createdAt;
 
@@ -38,6 +48,9 @@ class PledgeItemModel {
       grossWeight: (map['gross_weight'] as num?)?.toDouble() ?? 0.0,
       netWeight: (map['net_weight'] as num?)?.toDouble() ?? 0.0,
       purity: map['purity'] as String? ?? '',
+      pledgeRate: (map['pledge_rate'] as num?)?.toDouble() ?? 0.0,
+      goldRate: (map['gold_rate'] as num?)?.toDouble() ?? 0.0,
+      itemValue: (map['item_value'] as num?)?.toDouble() ?? 0.0,
       notes: map['notes'] as String?,
       createdAt: map['created_at'] as String? ?? '',
     );
@@ -53,6 +66,9 @@ class PledgeItemModel {
       'gross_weight': grossWeight,
       'net_weight': netWeight,
       'purity': purity,
+      'pledge_rate': pledgeRate,
+      'gold_rate': goldRate,
+      'item_value': itemValue,
       'notes': notes,
       'created_at': createdAt,
     };

@@ -193,7 +193,8 @@ class _EditPledgeSearchScreenState extends State<EditPledgeSearchScreen> {
         title: const Text('Edit Pledge'),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+        padding:
+            const EdgeInsets.fromLTRB(20, 24, 20, 40).withNavBarInset(context),
         children: [
           const FlowSectionTitle('Search Pledge'),
           TextField(
@@ -445,7 +446,8 @@ class _ReasonBottomSheetState extends State<_ReasonBottomSheet> {
         borderRadius: BorderRadius.all(Radius.circular(20)),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
+        padding:
+            EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom).withNavBarInset(context),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

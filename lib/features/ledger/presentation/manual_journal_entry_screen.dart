@@ -261,7 +261,8 @@ class _ManualJournalEntryScreenState extends State<ManualJournalEntryScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 24)
+                  .withNavBarInset(context),
               children: [
                 FlowCard(
                   child: Column(

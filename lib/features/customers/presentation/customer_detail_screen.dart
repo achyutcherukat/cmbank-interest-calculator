@@ -169,7 +169,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Widget _buildBody() {
     final c = _customer!;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      padding:
+          const EdgeInsets.fromLTRB(16, 16, 16, 16).withNavBarInset(context),
       children: [
         _summaryCard(c),
         _infoCard(c),

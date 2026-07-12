@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS pledge_items (
   gross_weight REAL NOT NULL DEFAULT 0,
   net_weight REAL NOT NULL DEFAULT 0,
   purity TEXT,
+  pledge_rate REAL NOT NULL DEFAULT 0,
+  gold_rate REAL NOT NULL DEFAULT 0,
+  item_value REAL NOT NULL DEFAULT 0,
   notes TEXT,
   created_at DATETIME NOT NULL
 )
@@ -258,6 +261,7 @@ CREATE TABLE IF NOT EXISTS gold_rates (
   rate_date DATE NOT NULL,
   gold_rate REAL,
   pledge_rate REAL NOT NULL DEFAULT 0,
+  purity_type_id INTEGER REFERENCES purity_types(id),
   created_by INTEGER REFERENCES users(id),
   created_at DATETIME NOT NULL
 )

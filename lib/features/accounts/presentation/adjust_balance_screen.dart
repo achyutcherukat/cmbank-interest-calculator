@@ -354,7 +354,10 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
           labelText: 'Reason *',
           hintText: 'Why is this adjustment needed?',
         ),
-        maxLines: 2,
+        keyboardType: TextInputType.text,
+        textInputAction: TextInputAction.done,
+        minLines: 1,
+        maxLines: null,
         onChanged: (_) {
           if (_error != null) setState(() => _error = null);
         },
@@ -587,7 +590,7 @@ class _AdjustBalanceScreenState extends State<AdjustBalanceScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(20).withNavBarInset(context),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

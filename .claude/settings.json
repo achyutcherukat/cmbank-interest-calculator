@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& \"C:\\\\flutter\\\\flutter\\\\bin\\\\flutter.bat\" analyze lib/features/pledges/pledge_form_print_report.dart 2>&1)",
+      "PowerShell(& \"C:\\\\flutter\\\\flutter\\\\bin\\\\flutter.bat\" test test/rupee_glyph_smoke_test.dart 2>&1)",
+      "PowerShell(& \"C:\\\\flutter\\\\flutter\\\\bin\\\\flutter.bat\" test test/closure_section_fit_smoke_test.dart 2>&1)",
+      "PowerShell(& \"C:\\\\flutter\\\\flutter\\\\bin\\\\flutter.bat\" analyze lib/features/pledges/pledge_form_print_report.dart lib/core/services/print_service.dart 2>&1)"
+    ]
+  }
+}

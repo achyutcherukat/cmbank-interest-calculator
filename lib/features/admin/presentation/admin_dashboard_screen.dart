@@ -446,7 +446,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 40),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 40)
+                    .withNavBarInset(context),
                 children: [
                   _overviewGrid(),
                   _todayActivitySection(),
@@ -532,11 +533,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         children: [
           Icon(icon, color: color, size: 24),
           const SizedBox(height: 8),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: color)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value,
+                maxLines: 1,
+                softWrap: false,
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: color)),
+          ),
           const SizedBox(height: 4),
           Text(label,
               style: const TextStyle(fontSize: 13, color: Colors.black54)),
@@ -705,11 +712,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Text(count,
-                    style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                        color: FlowColors.primary)),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(count,
+                      maxLines: 1,
+                      softWrap: false,
+                      style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                          color: FlowColors.primary)),
+                ),
               ),
               Icon(icon, color: FlowColors.goldRich, size: 26),
             ],

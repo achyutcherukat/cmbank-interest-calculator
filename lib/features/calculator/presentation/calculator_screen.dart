@@ -252,7 +252,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       ),
       backgroundColor: FlowColors.bg,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20).withNavBarInset(context),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -373,7 +373,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              // Close Pledge button at the bottom after results
+              // Search Pledge button at the bottom after results
               RestrictedAction(
                 child: SizedBox(
                 width: double.infinity,
@@ -381,7 +381,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 child: ElevatedButton.icon(
                   onPressed: _openClosePledgeSearch,
                   icon: const Icon(Icons.lock, size: 24),
-                  label: const Text('CLOSE PLEDGE',
+                  label: const Text('SEARCH PLEDGE',
                       style: TextStyle(
                           fontSize: 20, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(

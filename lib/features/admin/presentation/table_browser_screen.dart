@@ -455,7 +455,7 @@ class _TableBrowserScreenState extends State<TableBrowserScreen>
       scrollDirection: Axis.vertical,
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(12).withNavBarInset(context),
         child: DataTable(
           columnSpacing: 20,
           horizontalMargin: 12,

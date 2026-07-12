@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/widgets/flow_widgets.dart';
 import '../../admin/data/admin_repository.dart';
 import 'balance_sheet_screen.dart';
+import 'day_book_screen.dart';
 import 'general_ledger_screen.dart';
 import 'manual_journal_entry_screen.dart';
 import 'profit_loss_screen.dart';
@@ -48,6 +49,12 @@ class _LedgerHomeScreenState extends State<LedgerHomeScreen> {
       builder: () => const TrialBalanceScreen(),
     ),
     (
+      icon: Icons.today,
+      label: 'Day Book',
+      subtitle: 'All ledger entries posted on one date',
+      builder: () => const DayBookScreen(),
+    ),
+    (
       icon: Icons.trending_up,
       label: 'Profit & Loss',
       subtitle: 'Income and expenses for a period',
@@ -84,7 +91,8 @@ class _LedgerHomeScreenState extends State<LedgerHomeScreen> {
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
+        padding:
+            const EdgeInsets.fromLTRB(16, 20, 16, 40).withNavBarInset(context),
         children: [
           for (final option in _options) ...[
             FlowCard(

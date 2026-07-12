@@ -23,6 +23,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isAuthenticating = false;
   bool _canUseBiometrics = false;
   bool _useAdminPin = false;
+  bool _hasAutoTriggeredBiometric = false;
   String? _errorText;
 
   static final _inputFormatters = [
@@ -50,10 +51,22 @@ class _LoginScreenState extends State<LoginScreen> {
           _canUseBiometrics = available;
           _isChecking = false;
         });
+        if (available) _autoTriggerBiometrics();
       }
     } catch (_) {
       if (mounted) setState(() => _isChecking = false);
     }
+  }
+
+  // Fires the biometric prompt once per screen instance, after the PIN UI
+  // has already been laid out so Cancel always leaves a usable fallback.
+  void _autoTriggerBiometrics() {
+    if (_hasAutoTriggeredBiometric) return;
+    _hasAutoTriggeredBiometric = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _useAdminPin) return;
+      _unlockWithBiometrics(silent: true);
+    });
   }
 
   Future<void> _unlockWithPin() async {
@@ -104,7 +117,9 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _unlockWithBiometrics() async {
+  Future<void> _unlockWithBiometrics({bool silent = false}) async {
+    if (_isAuthenticating) return;
+
     setState(() {
       _isAuthenticating = true;
       _errorText = null;
@@ -117,9 +132,15 @@ class _LoginScreenState extends State<LoginScreen> {
         widget.onAuthenticated();
         return;
       }
+      // User cancelled the native prompt (or it failed without throwing) —
+      // dismiss quietly and stay on the PIN UI already on screen.
     } catch (_) {
       if (!mounted) return;
-      setState(() => _errorText = 'Fingerprint unlock is not available.');
+      // A real error (not enrolled / locked out / etc). Only surface it for
+      // a manual retry; the auto-trigger should never show an error dialog.
+      if (!silent) {
+        setState(() => _errorText = 'Fingerprint unlock is not available.');
+      }
     } finally {
       if (mounted) setState(() => _isAuthenticating = false);
     }

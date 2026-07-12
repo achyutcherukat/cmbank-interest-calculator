@@ -450,7 +450,8 @@ class _InitialSetupValuesScreenState extends State<InitialSetupValuesScreen> {
           : Stack(
               children: [
                 ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 40)
+                      .withNavBarInset(context),
                   children: [
                     _balancesCard(),
                     const SizedBox(height: 14),

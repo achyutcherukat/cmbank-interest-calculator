@@ -1,6 +1,5 @@
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 import '../../core/constants/business_info.dart';
 import '../../core/services/print_service.dart';
@@ -101,13 +100,12 @@ class CashBookPrintReport {
     final bankTotals = await DailyAccountBalanceRepository.instance
         .getTotalsForDate(businessDate, isLocked: true, dailyBalanceId: balance.id);
 
-    final logo = await PrintService.loadLogo();
-
     // Noto Sans includes the ₹ glyph (U+20B9), which the default PDF font
     // (Helvetica) lacks. Set it as the document theme so every pw.Text renders
-    // the rupee sign correctly without per-widget font wiring.
-    final baseFont = await PdfGoogleFonts.notoSansRegular();
-    final boldFont = await PdfGoogleFonts.notoSansBold();
+    // the rupee sign correctly without per-widget font wiring. Loaded from a
+    // bundled asset (not google_fonts' runtime fetch) so it works offline.
+    final baseFont = await PrintService.notoSansRegular();
+    final boldFont = await PrintService.notoSansBold();
     final doc = pw.Document(
       theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
     );
@@ -131,7 +129,7 @@ class CashBookPrintReport {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 22),
-        header: (context) => _letterhead(logo, reportDate),
+        header: (context) => _letterhead(reportDate),
         footer: (context) => _footer(context, printStamp),
         build: (context) => [
           // Reads straight down: opening → money in → money out → closing,
@@ -176,19 +174,13 @@ class CashBookPrintReport {
 
   // ─── Letterhead (every page, black divider) ──────────────────────────────────
 
-  static pw.Widget _letterhead(pw.ImageProvider logo, String reportDate) {
+  static pw.Widget _letterhead(String reportDate) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
         pw.Row(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
-            pw.SizedBox(
-              height: 54,
-              width: 54,
-              child: pw.Image(logo, fit: pw.BoxFit.contain),
-            ),
-            pw.SizedBox(width: 12),
             pw.Expanded(
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,

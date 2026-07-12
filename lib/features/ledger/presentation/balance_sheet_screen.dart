@@ -171,7 +171,8 @@ class _BalanceSheetScreenState extends State<BalanceSheetScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 32)
+                  .withNavBarInset(context),
               children: [
                 if (!_openingPosted)
                   OpeningBalancePendingBanner(
@@ -385,8 +386,11 @@ class _BalanceSheetScreenState extends State<BalanceSheetScreen> {
           _totalRow('Current Year Earnings',
               LedgerAmountFormatter.format(_currentYearEarnings)),
           const Divider(color: Colors.white24, height: 18),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
             children: [
               Text(
                   mismatch

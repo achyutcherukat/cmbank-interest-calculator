@@ -371,7 +371,8 @@ class _YearEndClosingScreenState extends State<YearEndClosingScreen> {
     final expenses = (c['total_expenses'] as num?)?.toDouble() ?? 0;
     final net = (c['net_result'] as num?)?.toDouble() ?? 0;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      padding:
+          const EdgeInsets.fromLTRB(16, 16, 16, 32).withNavBarInset(context),
       children: [
         _fySelectorCard(),
         const SizedBox(height: 4),
@@ -440,7 +441,8 @@ class _YearEndClosingScreenState extends State<YearEndClosingScreen> {
 
   Widget _wizard() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      padding:
+          const EdgeInsets.fromLTRB(16, 16, 16, 32).withNavBarInset(context),
       children: [
         _stepHeader(),
         const SizedBox(height: 12),

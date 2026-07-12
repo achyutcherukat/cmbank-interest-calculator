@@ -117,6 +117,7 @@ class _LoadExistingPledgeScreenState
     extends State<LoadExistingPledgeScreen> {
   int _step = 1;
   final _imagePicker = ImagePicker();
+  final _scrollController = ScrollController();
 
   // ── Step 1 ──────────────────────────────────────────────────────────────────
   final _pledgeNoCtrl = TextEditingController();
@@ -247,7 +248,7 @@ class _LoadExistingPledgeScreenState
     );
 
     // Start on step 5
-    if (mounted) setState(() => _step = 5);
+    if (mounted) _goToStep(5);
   }
 
   @override
@@ -260,23 +261,36 @@ class _LoadExistingPledgeScreenState
     _loanAmtFocus.dispose();
     _grossFocus.dispose();
     _netFocus.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   // ── Navigation ───────────────────────────────────────────────────────────────
 
+  /// Switches to [step] and resets the shared ListView's scroll position to
+  /// the top, since every step is rendered inside the same scrollable and
+  /// otherwise inherits the previous step's scroll offset.
+  void _goToStep(int step) {
+    setState(() => _step = step);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scrollController.hasClients) {
+        _scrollController.jumpTo(0);
+      }
+    });
+  }
+
   void _back() {
     if (widget.editMode) {
       if (_step > 1 && _step != 5) {
-        setState(() => _step--);
+        _goToStep(_step - 1);
       } else {
         Navigator.pop(context);
       }
     } else {
       if (_step == 5) {
-        setState(() => _step = 3);
+        _goToStep(3);
       } else if (_step > 1) {
-        setState(() => _step--);
+        _goToStep(_step - 1);
       } else {
         Navigator.pop(context);
       }
@@ -355,7 +369,7 @@ class _LoadExistingPledgeScreenState
       }
     }
 
-    setState(() => _step = 2);
+    _goToStep(2);
   }
 
   Future<void> _checkPledgeNo() async {
@@ -588,6 +602,11 @@ class _LoadExistingPledgeScreenState
       _savedPledgeNo = null;
       _savedAmount = null;
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scrollController.hasClients) {
+        _scrollController.jumpTo(0);
+      }
+    });
   }
 
   void _showError(String message) {
@@ -630,9 +649,9 @@ class _LoadExistingPledgeScreenState
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (!didPop) {
           if (widget.editMode) {
-            if (_step > 1 && _step != 5) setState(() => _step--);
+            if (_step > 1 && _step != 5) _goToStep(_step - 1);
           } else {
-            setState(() => _step--);
+            _goToStep(_step - 1);
           }
         }
       },
@@ -655,7 +674,9 @@ class _LoadExistingPledgeScreenState
               ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+                controller: _scrollController,
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 40)
+                    .withNavBarInset(context),
                 children: [
                   if (_step == 1) _buildStep1(),
                   if (_step == 2) _buildStep2(),
@@ -857,7 +878,7 @@ class _LoadExistingPledgeScreenState
   Widget _buildStep2() {
     void skip() {
       _capturedCustomer = _customerKey.currentState?.getData();
-      setState(() => _step = 3);
+      _goToStep(3);
     }
 
     void proceed() {
@@ -867,7 +888,7 @@ class _LoadExistingPledgeScreenState
         return;
       }
       _capturedCustomer = _customerKey.currentState?.getData();
-      setState(() => _step = 3);
+      _goToStep(3);
     }
 
     return Column(
@@ -896,13 +917,12 @@ class _LoadExistingPledgeScreenState
           netWeight: _netWeight,
           initialData: _capturedItems,
           pledgeNumber: _pledgeNoCtrl.text.trim(),
-          prefillOtherItem: true,
         ),
         const SizedBox(height: 20),
         _skipProceedRow(
           () {
             _capturedItems = _itemsKey.currentState?.getData();
-            setState(() => _step = 5);
+            _goToStep(5);
           },
           () {
             final validationError = _itemsKey.currentState?.validate();
@@ -930,7 +950,7 @@ class _LoadExistingPledgeScreenState
               }
             }
             _capturedItems = data;
-            setState(() => _step = 5);
+            _goToStep(5);
           },
         ),
       ],
@@ -1081,8 +1101,8 @@ class _LoadExistingPledgeScreenState
           ),
         const SizedBox(height: 24),
         _skipProceedRow(
-          () => setState(() => _step = 5),
-          () => setState(() => _step = 5),
+          () => _goToStep(5),
+          () => _goToStep(5),
         ),
       ],
     );
@@ -1104,7 +1124,7 @@ class _LoadExistingPledgeScreenState
         // Pledge Details
         _summarySection(
           title: 'PLEDGE DETAILS',
-          onEdit: () => setState(() => _step = 1),
+          onEdit: () => _goToStep(1),
           children: [
             _summaryRow('Pledge No.', '#${_pledgeNoCtrl.text}',
                 highlight: true),
@@ -1120,7 +1140,7 @@ class _LoadExistingPledgeScreenState
         // Customer
         _summarySection(
           title: 'CUSTOMER',
-          onEdit: () => setState(() => _step = 2),
+          onEdit: () => _goToStep(2),
           children: customer != null && customer.name.isNotEmpty
               ? [
                   if (customer.phone.isNotEmpty)
@@ -1151,7 +1171,7 @@ class _LoadExistingPledgeScreenState
         // Items
         _summarySection(
           title: 'ITEMS',
-          onEdit: () => setState(() => _step = 3),
+          onEdit: () => _goToStep(3),
           children: itemData != null && itemData.items.isNotEmpty
               ? [
                   ...List.generate(itemData.items.length, (i) {
@@ -1196,7 +1216,7 @@ class _LoadExistingPledgeScreenState
         // Form scan
         _summarySection(
           title: 'FORM SCAN',
-          onEdit: () => setState(() => _step = 4),
+          onEdit: () => _goToStep(4),
           editLabel: _formPhotos.isEmpty ? 'ADD FORMS' : 'EDIT',
           children: _formPhotos.isNotEmpty
               ? [
@@ -1267,7 +1287,7 @@ class _LoadExistingPledgeScreenState
         // Pledge Details (no edit button for pledge no & date)
         _summarySection(
           title: 'PLEDGE DETAILS',
-          onEdit: () => setState(() => _step = 1),
+          onEdit: () => _goToStep(1),
           children: [
             _summaryRow('Pledge No.', '#${p.pledgeNumber}',
                 highlight: true),
@@ -1283,7 +1303,7 @@ class _LoadExistingPledgeScreenState
         // Customer
         _summarySection(
           title: 'CUSTOMER',
-          onEdit: () => setState(() => _step = 2),
+          onEdit: () => _goToStep(2),
           children: customer != null && customer.name.isNotEmpty
               ? [
                   if (customer.phone.isNotEmpty)
@@ -1315,7 +1335,7 @@ class _LoadExistingPledgeScreenState
         // Items
         _summarySection(
           title: 'ITEMS',
-          onEdit: () => setState(() => _step = 3),
+          onEdit: () => _goToStep(3),
           children: itemData != null && itemData.items.isNotEmpty
               ? [
                   ...List.generate(itemData.items.length, (i) {
@@ -1361,7 +1381,7 @@ class _LoadExistingPledgeScreenState
         // Form Scan
         _summarySection(
           title: 'FORM SCAN',
-          onEdit: () => setState(() => _step = 4),
+          onEdit: () => _goToStep(4),
           editLabel: _formPhotos.isEmpty ? 'ADD FORMS' : 'EDIT',
           children: _formPhotos.isNotEmpty
               ? [

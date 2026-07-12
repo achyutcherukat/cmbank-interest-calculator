@@ -44,7 +44,7 @@ class _GeneralLedgerScreenState extends State<GeneralLedgerScreen> {
   int? _accountId;
   late DateTime _from;
   late DateTime _to;
-  bool _showVirtual = false;
+  bool _showVirtual = true;
 
   bool _openingPosted = true;
   String _ledgerStartDate = '';
@@ -360,7 +360,8 @@ class _GeneralLedgerScreenState extends State<GeneralLedgerScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
+        padding:
+            const EdgeInsets.fromLTRB(16, 14, 16, 32).withNavBarInset(context),
         children: [
           if (!_openingPosted)
             OpeningBalancePendingBanner(ledgerStartDate: _ledgerStartDate),
@@ -487,7 +488,11 @@ class _GeneralLedgerScreenState extends State<GeneralLedgerScreen> {
           isDense: true,
           suffixIcon: const Icon(Icons.calendar_today_outlined, size: 16),
         ),
-        child: Text(_display(value), style: const TextStyle(fontSize: 14)),
+        child: Text(_display(value),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: const TextStyle(fontSize: 14)),
       ),
     );
   }

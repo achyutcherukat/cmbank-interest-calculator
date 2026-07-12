@@ -321,6 +321,14 @@ class PledgeRepository {
   /// Inserts a new pledge that inherits gold/customer details from [old] and is
   /// linked to it through `renewal_parent_id`. Copies the old pledge's items.
   /// Returns the new pledge id. Must be called inside a transaction.
+  ///
+  /// [keptItems], when non-null (Part Release "item release" flow), replaces
+  /// the default copy-all-items behavior: only these items are inserted for
+  /// the new pledge, and its gross/net weight are recomputed as their sum
+  /// instead of being inherited from [old]. Leaving it null (every other
+  /// renewal flow) reproduces today's copy-everything behavior exactly.
+  /// [notesOverride], when non-null, replaces the new pledge's notes instead
+  /// of inheriting [old]'s notes.
   Future<int> createRenewalPledge(
     DatabaseExecutor txn, {
     required PledgeModel old,
@@ -329,6 +337,8 @@ class PledgeRepository {
     required String now,
     int? createdBy,
     String? startDate,
+    List<PledgeItemModel>? keptItems,
+    String? notesOverride,
   }) async {
     final newPledge = old.copyWith(
       id: null,
@@ -347,20 +357,38 @@ class PledgeRepository {
     );
     final map = newPledge.toMap();
     map.remove('id');
+    if (keptItems != null) {
+      map['gross_weight'] = keptItems.fold(0.0, (s, i) => s + i.grossWeight);
+      map['net_weight'] = keptItems.fold(0.0, (s, i) => s + i.netWeight);
+    }
+    if (notesOverride != null) {
+      map['notes'] = notesOverride;
+    }
     map['created_by'] = createdBy;
     map['created_at'] = now;
     map['updated_at'] = now;
     final newPledgeId = await txn.insert('pledges', map);
 
-    // Copy items.
-    final items = await txn
-        .query('pledge_items', where: 'pledge_id = ?', whereArgs: [old.id]);
-    for (final item in items) {
-      final copy = Map<String, dynamic>.from(item);
-      copy.remove('id');
-      copy['pledge_id'] = newPledgeId;
-      copy['created_at'] = now;
-      await txn.insert('pledge_items', copy);
+    if (keptItems != null) {
+      // Item release: only the kept (possibly edited) items carry forward.
+      for (final item in keptItems) {
+        final copy = item.toMap();
+        copy.remove('id');
+        copy['pledge_id'] = newPledgeId;
+        copy['created_at'] = now;
+        await txn.insert('pledge_items', copy);
+      }
+    } else {
+      // Copy all items unchanged (default behavior for every renewal flow).
+      final items = await txn
+          .query('pledge_items', where: 'pledge_id = ?', whereArgs: [old.id]);
+      for (final item in items) {
+        final copy = Map<String, dynamic>.from(item);
+        copy.remove('id');
+        copy['pledge_id'] = newPledgeId;
+        copy['created_at'] = now;
+        await txn.insert('pledge_items', copy);
+      }
     }
 
     // Register photos for the new pledge by copying the old pledge's
@@ -521,6 +549,8 @@ class PledgeRepository {
     required String auditAction,
     int? createdBy,
     String? contextDate,
+    List<PledgeItemModel>? keptItems,
+    String? notesOverride,
     Future<void> Function(
       DatabaseExecutor txn,
       int oldPledgeId,
@@ -562,6 +592,8 @@ class PledgeRepository {
         now: now,
         startDate: contextDate,
         createdBy: createdBy,
+        keptItems: keptItems,
+        notesOverride: notesOverride,
       );
 
       if (onPayment != null) {
@@ -630,6 +662,10 @@ class PledgeRepository {
   }
 
   /// 3F — Part payment: principal & interest.
+  ///
+  /// [keptItems]/[notesOverride] are only used by the optional "item release"
+  /// flow on Part Release — leave null for the default (all items carry
+  /// forward, notes inherited) behavior.
   Future<String> partPaymentPrincipalAndInterest({
     required int oldPledgeId,
     required double newPrincipal,
@@ -640,6 +676,8 @@ class PledgeRepository {
     int? bankAccountId,
     int? createdBy,
     String? contextDate,
+    List<PledgeItemModel>? keptItems,
+    String? notesOverride,
   }) {
     return _runRenewalFlow(
       oldPledgeId: oldPledgeId,
@@ -650,6 +688,8 @@ class PledgeRepository {
       auditAction: 'PLEDGE_PART_PAYMENT',
       createdBy: createdBy,
       contextDate: contextDate,
+      keptItems: keptItems,
+      notesOverride: notesOverride,
       onPayment: (txn, oldId, newId, today) => _payments.createPartPayment(
           oldId, totalPaid, cashAmount, bankAmount,
           PaymentSubCategory.principalAndInterest, today,
@@ -658,6 +698,10 @@ class PledgeRepository {
   }
 
   /// 3G — Part payment: fixed amount inclusive.
+  ///
+  /// [keptItems]/[notesOverride] are only used by the optional "item release"
+  /// flow on Part Release — leave null for the default (all items carry
+  /// forward, notes inherited) behavior.
   Future<String> partPaymentFixedAmount({
     required int oldPledgeId,
     required double newPrincipal,
@@ -668,6 +712,8 @@ class PledgeRepository {
     int? bankAccountId,
     int? createdBy,
     String? contextDate,
+    List<PledgeItemModel>? keptItems,
+    String? notesOverride,
   }) {
     return _runRenewalFlow(
       oldPledgeId: oldPledgeId,
@@ -678,6 +724,8 @@ class PledgeRepository {
       auditAction: 'PLEDGE_PART_PAYMENT',
       createdBy: createdBy,
       contextDate: contextDate,
+      keptItems: keptItems,
+      notesOverride: notesOverride,
       onPayment: (txn, oldId, newId, today) => _payments.createPartPayment(
           oldId, fixedAmount, cashAmount, bankAmount,
           PaymentSubCategory.fixedAmountInclusive, today,

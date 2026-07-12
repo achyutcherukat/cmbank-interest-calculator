@@ -154,7 +154,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16).withNavBarInset(context),
               itemCount: groupKeys.length,
               itemBuilder: (context, groupIndex) {
                 final groupLabel = groupKeys[groupIndex];

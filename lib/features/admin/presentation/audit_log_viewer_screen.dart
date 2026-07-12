@@ -149,7 +149,8 @@ class _AuditLogViewerScreenState extends State<AuditLogViewerScreen>
                     : RefreshIndicator(
                         onRefresh: _load,
                         child: ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 40)
+                              .withNavBarInset(context),
                           itemCount: _entries.length,
                           itemBuilder: (_, i) => _entryCard(_entries[i]),
                         ),
@@ -357,7 +358,7 @@ class _AuditDetailScreen extends StatelessWidget {
         title: const Text('Log Entry'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16).withNavBarInset(context),
         children: [
           FlowCard(
             header: 'Details',

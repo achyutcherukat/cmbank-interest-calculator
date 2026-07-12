@@ -98,8 +98,8 @@ class _GoldInDrillDownScreenState extends State<GoldInDrillDownScreen> {
                           ),
                         )
                       : ListView.builder(
-                          padding:
-                              const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 40)
+                              .withNavBarInset(context),
                           itemCount: _entries.length + 1,
                           itemBuilder: (_, i) {
                             if (i == _entries.length) {

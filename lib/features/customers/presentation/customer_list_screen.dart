@@ -103,8 +103,8 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                     : RefreshIndicator(
                         onRefresh: _load,
                         child: ListView.builder(
-                          padding:
-                              const EdgeInsets.fromLTRB(16, 4, 16, 90),
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 90)
+                              .withNavBarInset(context),
                           itemCount: _customers.length,
                           itemBuilder: (ctx, i) => _CustomerCard(
                             customer: _customers[i],

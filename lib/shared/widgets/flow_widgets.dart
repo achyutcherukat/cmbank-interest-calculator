@@ -28,6 +28,16 @@ class FlowColors {
   static const medText = Color(0xFF555555);
 }
 
+/// Adds the Android system navigation bar inset (large in 3-button mode,
+/// small/zero in gesture mode) to the bottom of any [EdgeInsets]. Use on the
+/// `padding:` of scrollables or bottom-anchored bars so trailing buttons stay
+/// clear of the nav bar. The inset is 0 wherever the Scaffold already insets
+/// the content (e.g. above a `bottomNavigationBar`), so it never double-pads.
+extension NavBarInsetPadding on EdgeInsets {
+  EdgeInsets withNavBarInset(BuildContext context) =>
+      copyWith(bottom: bottom + MediaQuery.of(context).padding.bottom);
+}
+
 class FlowCard extends StatelessWidget {
   const FlowCard({
     super.key,

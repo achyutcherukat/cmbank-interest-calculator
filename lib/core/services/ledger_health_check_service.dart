@@ -191,8 +191,16 @@ class LedgerHealthCheckService {
     final missing = <MissingPosting>[];
 
     // 1. Payments on a locked date with no non-reversed 'payment' entry.
-    //    Retired cash top-ups (ADJUSTMENT / ADD_CASH|ADD_UPI) never post, so
-    //    they are excluded rather than flagged.
+    //    Retired cash top-ups (ADJUSTMENT / ADD_CASH|ADD_UPI|ADD_BANK) never
+    //    post, so they are excluded rather than flagged.
+    //    Two-row transfer adjustments (CASH_TO_UPI, UPI_TO_CASH, CASH_TO_BANK,
+    //    BANK_TO_CASH, BANK_TO_BANK) post as ONE journal entry per pair, keyed
+    //    to the OUT row's id (see _postAdjustment in ledger_posting_service.dart)
+    //    — so the row that isn't the OUT row never has an entry under its own
+    //    id even when correctly posted. Such a row is only flagged if NEITHER
+    //    it nor its inferred transfer partner (same date/sub_category/amount,
+    //    opposite direction — same matching approach as getAdjustmentPartner
+    //    in payments_repository.dart) has a posted entry.
     final payments = await db.rawQuery('''
       SELECT p.id, p.payment_date, p.payment_type, p.sub_category, p.amount,
              p.pledge_id, pl.pledge_no, pl.status AS pledge_status
@@ -200,12 +208,30 @@ class LedgerHealthCheckService {
       JOIN daily_balance d
         ON d.business_date = DATE(p.payment_date) AND d.is_locked = 1
       LEFT JOIN pledges pl ON pl.id = p.pledge_id
-      LEFT JOIN journal_entries je
-        ON je.source_type = 'payment' AND je.source_id = p.id
-        AND je.is_reversed = 0
-      WHERE je.id IS NULL
-        AND NOT (p.payment_type = 'ADJUSTMENT'
-                 AND p.sub_category IN ('ADD_CASH', 'ADD_UPI'))
+      WHERE NOT (p.payment_type = 'ADJUSTMENT'
+                 AND p.sub_category IN ('ADD_CASH', 'ADD_UPI', 'ADD_BANK'))
+        AND NOT EXISTS (
+          SELECT 1 FROM journal_entries je
+          WHERE je.source_type = 'payment' AND je.source_id = p.id
+            AND je.is_reversed = 0
+        )
+        AND NOT (
+          p.payment_type = 'ADJUSTMENT'
+          AND p.sub_category IN ('CASH_TO_UPI', 'UPI_TO_CASH', 'CASH_TO_BANK',
+                                  'BANK_TO_CASH', 'BANK_TO_BANK')
+          AND EXISTS (
+            SELECT 1 FROM payments partner
+            JOIN journal_entries pje
+              ON pje.source_type = 'payment' AND pje.source_id = partner.id
+              AND pje.is_reversed = 0
+            WHERE partner.id != p.id
+              AND partner.payment_type = 'ADJUSTMENT'
+              AND partner.sub_category = p.sub_category
+              AND DATE(partner.payment_date) = DATE(p.payment_date)
+              AND ABS(partner.amount - p.amount) < 0.01
+              AND partner.direction != p.direction
+          )
+        )
       ORDER BY p.payment_date ASC, p.id ASC
     ''');
     for (final r in payments) {

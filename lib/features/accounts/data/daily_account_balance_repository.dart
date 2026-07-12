@@ -129,11 +129,16 @@ class DailyAccountBalanceRepository {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  /// Opening balance for [date] for [acct]: the closing_balance of the most
-  /// recent prior locked row, or a fallback when none exists.
+  /// Opening balance for [date] for [acct]: the closing balance of the previous
+  /// calendar day. Anchored on the most recent prior *locked* row's frozen
+  /// closing_balance, plus this account's live net bank movements for every
+  /// calendar day strictly between that anchor and [date]. Keying off the
+  /// previous calendar day (rather than jumping straight to the last locked
+  /// row's closing) means a row-less or unlocked gap day's movements are no
+  /// longer skipped — matching the combined cash book.
   ///
-  /// Fallback logic distinguishes account type by whether an ADD_BANK payment
-  /// exists on the account's start_date:
+  /// Fallback (no prior locked row at all) distinguishes account type by whether
+  /// an ADD_BANK payment exists on the account's start_date:
   ///   - No ADD_BANK payment → initial account (wizard / migration); return
   ///     acct.openingBalance (pre-existing money, not a cashbook transaction).
   ///   - ADD_BANK payment present → managed account; return 0.0 (the payment
@@ -144,7 +149,7 @@ class DailyAccountBalanceRepository {
     BankAccount acct,
   ) async {
     final rows = await db.rawQuery('''
-      SELECT dab.closing_balance
+      SELECT db_row.business_date AS anchor_date, dab.closing_balance AS closing
       FROM daily_account_balance dab
       JOIN daily_balance db_row ON db_row.id = dab.daily_balance_id
       WHERE dab.bank_account_id = ?
@@ -154,18 +159,53 @@ class DailyAccountBalanceRepository {
       LIMIT 1
     ''', [acct.id!, date]) as List<Map<String, dynamic>>;
 
-    if (rows.isNotEmpty && rows.first['closing_balance'] != null) {
-      return (rows.first['closing_balance'] as num).toDouble();
+    if (rows.isNotEmpty && rows.first['closing'] != null) {
+      final anchorClosing = (rows.first['closing'] as num).toDouble();
+      final anchorDate = rows.first['anchor_date'] as String;
+      // Net bank movements for the gap days after the anchor and before [date].
+      // No locked day can fall in this range (anchor is the most recent), so
+      // every intervening day is computed live from payments.
+      final net = await _netBankBetween(db, acct.id!,
+          from: anchorDate, fromInclusive: false, to: date);
+      return anchorClosing + net;
     }
 
+    // No prior locked row → base opening (account start), plus any movements on
+    // days between the account's start date and [date] that were never locked.
     final addBankRows = await db.rawQuery(
       "SELECT id FROM payments "
       "WHERE bank_account_id = ? AND sub_category = 'ADD_BANK' "
       "  AND DATE(payment_date) = ?",
       [acct.id!, acct.startDate],
     ) as List<Map<String, dynamic>>;
+    final baseOpening = addBankRows.isEmpty ? acct.openingBalance : 0.0;
+    final net = await _netBankBetween(db, acct.id!,
+        from: acct.startDate, fromInclusive: true, to: date);
+    return baseOpening + net;
+  }
 
-    return addBankRows.isEmpty ? acct.openingBalance : 0.0;
+  /// Net bank movement (in − out) for [bankAccountId] over the payment days in
+  /// (`from`, `to`) — `from` inclusive when [fromInclusive], `to` always
+  /// exclusive. Only 'in'/'out' directions count; anything else is ignored.
+  Future<double> _netBankBetween(
+    dynamic db,
+    int bankAccountId, {
+    required String from,
+    required bool fromInclusive,
+    required String to,
+  }) async {
+    final lowerOp = fromInclusive ? '>=' : '>';
+    final rows = await db.rawQuery('''
+      SELECT COALESCE(SUM(CASE
+        WHEN direction = 'in' THEN bank_amount
+        WHEN direction = 'out' THEN -bank_amount
+        ELSE 0 END), 0) AS net
+      FROM payments
+      WHERE bank_account_id = ?
+        AND DATE(payment_date) $lowerOp ?
+        AND DATE(payment_date) < ?
+    ''', [bankAccountId, from, to]) as List<Map<String, dynamic>>;
+    return (rows.first['net'] as num?)?.toDouble() ?? 0.0;
   }
 
   Future<double> _sumPayments(
